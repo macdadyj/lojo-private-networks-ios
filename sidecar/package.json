@@ -1,0 +1,11 @@
+{
+  "name": "ranch-field-api",
+  "private": true,
+  "version": "1.1.0",
+  "description": "Site gateway for the LOJO Private Networks phone app: roster, stills, GPIO via Cloud Run Pub-Node controlState, activity log. Never talks to App Engine Flex.",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io-client": "^2.5.0"
+  }
+}
