@@ -104,6 +104,11 @@ final class NetworkStore: ObservableObject {
 
     var hubConnected: Bool { network?.hub.connected ?? false }
 
+    var localNetworkBlocked: Bool {
+        if link == .unreachable, case .localNetworkDenied? = lastError { return true }
+        return false
+    }
+
     var onlineCount: Int { devices.filter(\.online).count }
     var offlineCount: Int { devices.count - onlineCount }
     var cameraCount: Int { devices.filter { $0.camera.enabled }.count }

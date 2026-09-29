@@ -168,6 +168,18 @@ final class ConnectionCheck: ObservableObject {
             )
         }
 
+        if case .localNetworkDenied? = lan?.error, !viaOverlay {
+            return Verdict(
+                tone: .bad, icon: "hand.raised.fill",
+                title: "Local Network access is off",
+                message: "iOS is blocking LOJO Networks from talking to devices on your Wi‑Fi, so the site gateway can't be reached even when you're on site.",
+                tips: [
+                    "Open Settings › Privacy & Security › Local Network and turn on LOJO Networks.",
+                    "Away from the site? Your LOJO VPN profile works without this permission.",
+                ]
+            )
+        }
+
         var tips: [String] = []
         let title: String
         let message: String
@@ -189,9 +201,6 @@ final class ConnectionCheck: ObservableObject {
                 : "You're on cellular data without the private overlay, so your devices can't be reached."
             tips = ["Away from the site? Turn on your LOJO VPN profile, then run the check again."]
             if phone.hasWiFi { tips.append("At the site? Join the site's Wi‑Fi network.") }
-        }
-        if case .transport(let code)? = lan?.error, phone.hasWiFi, code == .notConnectedToInternet || code == .cannotConnectToHost {
-            tips.append("If iOS asked about Local Network access and you declined, allow it in Settings › Privacy & Security › Local Network.")
         }
         return Verdict(tone: .bad, icon: "wifi.slash", title: title, message: message, tips: tips)
     }

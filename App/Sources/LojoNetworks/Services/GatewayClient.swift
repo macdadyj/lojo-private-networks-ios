@@ -4,6 +4,7 @@ enum GatewayError: LocalizedError, Sendable {
     case http(status: Int, message: String?)
     case badResponse
     case transport(URLError.Code)
+    case localNetworkDenied
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ enum GatewayError: LocalizedError, Sendable {
             return "The gateway sent a reply the app couldn't read."
         case .transport(let code):
             return Self.describe(code)
+        case .localNetworkDenied:
+            return "iOS is blocking this app from the local network."
         }
     }
 
@@ -42,7 +45,12 @@ enum GatewayError: LocalizedError, Sendable {
 
     static func wrap(_ error: Error) -> GatewayError {
         if let e = error as? GatewayError { return e }
-        if let e = error as? URLError { return .transport(e.code) }
+        if let e = error as? URLError {
+            // iOS reports a declined Local Network permission as an unsatisfied path, not a distinct code.
+            let path = String(describing: e.userInfo["_NSURLErrorNWPathKey"] ?? "")
+            if path.localizedCaseInsensitiveContains("local network prohibited") { return .localNetworkDenied }
+            return .transport(e.code)
+        }
         return .badResponse
     }
 }

@@ -47,7 +47,9 @@ struct HomeView: View {
                 EmptyStateCard(
                     systemImage: "wifi.exclamationmark",
                     title: "Can't reach your network",
-                    message: "This phone isn't on your site Wi‑Fi and the private overlay isn't answering. Run a connection check to see why.",
+                    message: store.localNetworkBlocked
+                        ? "iOS is blocking Local Network access for this app. Turn it on in Settings › Privacy & Security › Local Network, or connect your LOJO VPN profile."
+                        : "This phone isn't on your site Wi‑Fi and the private overlay isn't answering. Run a connection check to see why.",
                     primary: ("Run connection check", { router.tab = .check }),
                     secondary: ("Explore the demo", { store.isDemo = true })
                 )
@@ -181,6 +183,7 @@ struct ConnectionHealthCard: View {
             case .overlay: return "Encrypted overlay, nothing public\(latency)"
             }
         case .unreachable:
+            if store.localNetworkBlocked { return "Local Network access is off for this app. Tap for help." }
             return "Tap to see why and what to try."
         case .demo:
             return "Sample network\(latency)"

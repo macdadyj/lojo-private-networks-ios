@@ -56,6 +56,11 @@ struct OnboardingView: View {
 
                 VStack(spacing: 12) {
                     if page == pages.count - 1 {
+                        Label("iOS will ask to let LOJO Networks find devices on your local network. Choose Allow so the app can reach your site gateway on Wi‑Fi.", systemImage: "info.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.bottom, 4)
                         Button {
                             Haptics.success()
                             onFinish(false)
