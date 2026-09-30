@@ -156,6 +156,20 @@ final class NetworkStore: ObservableObject {
         }.joined(separator: "\n")
     }
 
+    /// One plain sentence for the Home health card when nothing answers.
+    func unreachableReason(phone: PhoneInterfaces = .current()) -> String {
+        if localNetworkBlocked { return "Local Network access is off for this app." }
+        let atsBlocked = lastProbes.contains { p in
+            if case .transport(let f)? = p.error { return f.isATSBlock }
+            return false
+        }
+        if atsBlocked { return "iOS blocked the connection. Update LOJO Networks." }
+        if phone.hasVPN { return "Your VPN is on, but the site gateway didn't answer through it." }
+        if phone.hasWiFi { return "This Wi‑Fi isn't your site network, and the LOJO VPN is off." }
+        if phone.cellularActive { return "On cellular data without the LOJO VPN." }
+        return "This phone has no network connection."
+    }
+
     func resetAddresses() {
         lanAddress = Self.defaultLAN
         overlayAddress = Self.defaultOverlay
@@ -291,7 +305,7 @@ final class NetworkStore: ObservableObject {
             try await c.requestCapture(socketID: sid)
         } catch {
             captureStage[device.key] = nil
-            show(Toast(style: .error, message: GatewayError.wrap(error).errorDescription ?? "Capture failed."))
+            show(Toast(style: .error, message: Self.failureText(error, fallback: "Capture failed.")))
             Haptics.error()
             return
         }
@@ -355,9 +369,14 @@ final class NetworkStore: ObservableObject {
             show(Toast(style: .success, message: "\(pin.title) on \(device.displayName) is now \(on ? "ON" : "OFF")."))
             Haptics.success()
         } catch {
-            show(Toast(style: .error, message: GatewayError.wrap(error).errorDescription ?? "The command didn't go through."))
+            show(Toast(style: .error, message: Self.failureText(error, fallback: "The command didn't go through.")))
             Haptics.error()
         }
+    }
+
+    private static func failureText(_ error: Error, fallback: String) -> String {
+        let e = GatewayError.wrap(error)
+        return "\(e.errorDescription ?? fallback) [\(e.technical)]"
     }
 
     func show(_ toast: Toast) {

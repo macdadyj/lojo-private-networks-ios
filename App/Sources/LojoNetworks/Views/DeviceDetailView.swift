@@ -368,20 +368,30 @@ struct OutputRow: View {
                 ProgressView()
                     .frame(width: 84)
             } else {
-                Button(action: action) {
-                    Text(pin.isOn ? "Turn off" : "Turn on")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 84)
-                        .padding(.vertical, 8)
+                Group {
+                    if pin.isOn {
+                        Button(action: action) { buttonLabel }
+                            .buttonStyle(.bordered)
+                            .tint(.primary)
+                    } else {
+                        Button(action: action) { buttonLabel }
+                            .buttonStyle(.borderedProminent)
+                            .tint(LojoTheme.accent)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .tint(pin.isOn ? .secondary : LojoTheme.accent)
                 .disabled(disabled)
             }
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(pin.title), \(pin.subtitle), currently \(pin.isOn ? "on" : "off")")
+    }
+
+    private var buttonLabel: some View {
+        Text(pin.isOn ? "Turn off" : "Turn on")
+            .font(.subheadline.weight(.semibold))
+            .frame(width: 84)
+            .padding(.vertical, 8)
     }
 
     private var detail: String {

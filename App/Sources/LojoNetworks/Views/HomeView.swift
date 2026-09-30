@@ -49,7 +49,7 @@ struct HomeView: View {
                     title: "Can't reach your network",
                     message: store.localNetworkBlocked
                         ? "iOS is blocking Local Network access for this app. Turn it on in Settings › Privacy & Security › Local Network, or connect your LOJO VPN profile."
-                        : "This phone isn't on your site Wi‑Fi and the private overlay isn't answering. Run a connection check to see why.",
+                        : "\(store.unreachableReason()) The connection check shows exactly which step failed.",
                     primary: ("Run connection check", { router.tab = .check }),
                     secondary: ("Explore the demo", { store.isDemo = true })
                 )
@@ -128,6 +128,13 @@ struct ConnectionHealthCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let codes = store.failureSummary, !codes.isEmpty {
+                        Text(codes)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
@@ -180,11 +187,10 @@ struct ConnectionHealthCard: View {
             if !store.hubConnected { return "Cameras and controls pause until the gateway reconnects." }
             switch ep.path {
             case .lan: return "Direct on the local network\(latency)"
-            case .overlay: return "Encrypted overlay, nothing public\(latency)"
+            case .overlay: return "Through your LOJO VPN, nothing public\(latency)"
             }
         case .unreachable:
-            if store.localNetworkBlocked { return "Local Network access is off for this app. Tap for help." }
-            return "Tap to see why and what to try."
+            return "\(store.unreachableReason()) Tap for details."
         case .demo:
             return "Sample network\(latency)"
         }

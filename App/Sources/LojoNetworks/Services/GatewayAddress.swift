@@ -24,7 +24,7 @@ enum GatewayAddress {
 
     static func validationMessage(_ raw: String) -> String? {
         if raw.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter an IP address or host name." }
-        return normalize(raw) == nil ? "Use an address like 100.96.1.18 or gateway.example.lan:8801." : nil
+        return normalize(raw) == nil ? "Use an address like 100.96.0.10 or gateway.example.lan:8801." : nil
     }
 
     enum HostClass: Sendable {

@@ -213,11 +213,15 @@ final class ConnectionCheck: ObservableObject {
             )
         }
         if viaOverlay {
+            var tips: [String] = []
+            if phone.hasWiFi && phone.hasVPN && lan != nil {
+                tips.append("You're on Wi‑Fi too, but with the VPN on iOS sends site addresses through the tunnel, so the direct Wi‑Fi path can't be used. Everything still works through the overlay.")
+            }
             return Verdict(
                 tone: .good, icon: "lock.shield.fill",
                 title: "Connected through your private overlay",
                 message: "Your LOJO VPN profile is carrying traffic over the encrypted private overlay. Your devices stay off the public internet.",
-                tips: []
+                tips: tips
             )
         }
 

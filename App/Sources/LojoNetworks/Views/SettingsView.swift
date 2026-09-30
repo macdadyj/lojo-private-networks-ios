@@ -32,30 +32,17 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LabeledContent("Site Wi‑Fi") {
-                        TextField("http://…", text: $store.lanAddress)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.callout.monospaced())
-                    }
-                    LabeledContent("Private overlay") {
-                        TextField("http://…", text: $store.overlayAddress)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.callout.monospaced())
-                    }
+                    AddressRow(path: .lan, text: $store.lanAddress, active: store.link.path == .lan)
+                    AddressRow(path: .overlay, text: $store.overlayAddress, active: store.link.path == .overlay)
                     Button("Reset to defaults") {
                         store.resetAddresses()
                         Task { await store.refresh(.user) }
                     }
+                    .disabled(store.isDemo)
                 } header: {
                     Text("Gateway addresses")
                 } footer: {
-                    Text("The app tries site Wi‑Fi first, then the private overlay. These are private addresses; they only work on your site network or with your LOJO VPN profile on.")
+                    Text("Enter an IP address or host name; the port defaults to 8801. The app tries both paths at once and uses site Wi‑Fi when it answers, otherwise the private overlay. Overlay addresses only work while your LOJO VPN profile is connected.")
                 }
 
                 Section("Appearance") {
@@ -102,5 +89,80 @@ struct SettingsView: View {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return "\(v) (\(b))"
+    }
+}
+
+/// One editable gateway address with validation and a one-tap reachability test.
+private struct AddressRow: View {
+    let path: ConnectionPath
+    @Binding var text: String
+    let active: Bool
+    @EnvironmentObject private var store: NetworkStore
+    @State private var testing = false
+    @State private var result: PathReport?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(path.longTitle, systemImage: path.systemImage)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if active {
+                    Text("IN USE")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(LojoTheme.online)
+                }
+            }
+            HStack(spacing: 8) {
+                TextField(path == .lan ? "IP address or host name" : "Overlay IP or host name", text: $text)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.callout.monospaced())
+                    .submitLabel(.done)
+                    .onSubmit { Task { await store.refresh(.user) } }
+                    .onChange(of: text) { result = nil }
+                Button {
+                    Task { await test() }
+                } label: {
+                    if testing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Test").font(.subheadline.weight(.semibold))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(testing || GatewayAddress.normalize(text) == nil)
+            }
+            if let problem = GatewayAddress.validationMessage(text) {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(LojoTheme.danger)
+            } else if let result {
+                Label(summary(result), systemImage: result.reachable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(result.reachable ? LojoTheme.online : LojoTheme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 2)
+        .disabled(store.isDemo)
+    }
+
+    private func test() async {
+        guard let url = GatewayAddress.normalize(text) else { return }
+        testing = true
+        result = await PathDiagnostics.run(GatewayEndpoint(path: path, baseURL: url))
+        testing = false
+        if result?.reachable == true { Haptics.success() } else { Haptics.warning() }
+    }
+
+    private func summary(_ r: PathReport) -> String {
+        if let net = r.probe?.network {
+            return "\(net.gateway.name) answered in \(r.probe?.latencyMs ?? 0) ms."
+        }
+        let code = r.probe?.error?.technical ?? "No answer"
+        let meaning = r.probe?.error?.errorDescription ?? ""
+        return "\(code) — \(meaning)"
     }
 }
