@@ -100,7 +100,7 @@ scripts/deploy-sidecar.sh   # syntax check, back up live server.js, copy, restar
 |---|---|---|
 | GET | `/health`, `/devices`, `/devices/:id`, `/devices/:id/still` | Legacy, unchanged (old Ranch Field app) |
 | POST | `/devices/:id/capture` | Webcam still request; now 503 when the hub is disconnected (it used to be silently queued) |
-| POST | `/devices/:id/gpio` | `{pin:"11", value:0\|1}` → Cloud Run `controlState`; BCM 0–27; 503 when hub down |
+| POST | `/devices/:id/gpio` | `{pin:"11", value:0\|1}` → Cloud Run `controlState`; pin = 40-pin header position (11 = GPIO 17); 503 when hub down |
 | GET | `/v1/network` | Gateway/hub health, counts, `arrivedVia` = `lan` / `overlay` / `local` |
 | GET | `/v1/devices` | Roster incl. offline devices (keyed by stable name), camera, GPIO, `location {lat,lon,source}` |
 | GET | `/v1/events?limit=&device=` | Activity log (ring of 300, persisted in `~/.local/state/ranch-field-api/state.json`) |
@@ -126,7 +126,7 @@ Examples:
 
 ```bash
 scripts/phone-shot.sh /tmp/home.png   LOJO_DEMO=0 LOJO_SCREEN=home
-scripts/phone-shot.sh /tmp/gate.png   LOJO_DEMO=1 LOJO_SCREEN=detail LOJO_DEVICE=north-gate LOJO_CONFIRM_GPIO=17
+scripts/phone-shot.sh /tmp/gate.png   LOJO_DEMO=1 LOJO_SCREEN=detail LOJO_DEVICE=north-gate LOJO_CONFIRM_GPIO=11
 scripts/phone-shot.sh /tmp/off.png    LOJO_DEMO=0 LOJO_SCREEN=check LOJO_SIMULATE_OFFLINE=1
 ```
 

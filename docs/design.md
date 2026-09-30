@@ -51,7 +51,7 @@ Additive, read-only `v1` routes used by this app:
 | `GET /v1/devices` | Roster including devices that went **offline** (kept by stable name), capabilities, GPIO pins, location (lat/lon) when reported |
 | `GET /v1/events?limit=&device=` | Activity timeline: device online/offline, capture requested/completed/failed, GPIO set, hub connected/disconnected. In-memory ring (300) persisted to `~/.local/state/ranch-field-api/` |
 
-Capture and GPIO writes also append events. GPIO still validates BCM 0–27 and value 0/1, and now
+Capture and GPIO writes also append events. GPIO validates 40-pin header GPIO positions and value 0/1, and now
 refuses (409) when the device is offline.
 
 ## Screens

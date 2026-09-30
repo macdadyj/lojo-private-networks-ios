@@ -159,7 +159,7 @@ struct EventRow: View {
         case "local": parts.append("From the site gateway")
         default: break
         }
-        if event.kind == .gpioSet, let pin = event.pin { parts.append("BCM \(pin)") }
+        if event.kind == .gpioSet, let pin = event.pin { parts.append("header pin \(pin)") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

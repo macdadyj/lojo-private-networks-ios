@@ -17,6 +17,7 @@ const LAN_PREFIXES = (process.env.LAN_PREFIXES || "192.168.").split(",");
 const OVERLAY_PREFIXES = (process.env.OVERLAY_PREFIXES || "100.").split(",");
 const MAX_EVENTS = 300;
 const VERSION = "1.2.0";
+const HEADER_GPIO_PINS = new Set([3, 5, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 21, 22, 23, 24, 26, 27, 28, 29, 31, 32, 33, 35, 36, 37, 38, 40]);
 const startedAt = new Date().toISOString();
 
 const devices = new Map(); // socketID -> sanitized public record
@@ -42,7 +43,7 @@ function gpioPinsOf(data) {
     if (n === 0 || n === 1) out[String(pin)] = n;
   });
   const site = String(locProps(data).site || "").toLowerCase();
-  // Vision / bluebox Cloud Run nodes use BCM 11 even when the live map is empty.
+  // Vision / bluebox Cloud Run nodes drive header pin 11 (GPIO 17) even when the live map is empty.
   if (!Object.keys(out).length && (site === "vision" || site === "bluebox")) {
     out["11"] = 0;
   }
@@ -496,8 +497,9 @@ app.post("/devices/:id/gpio", (req, res) => {
   }
   const pin = String((req.body && req.body.pin) != null ? req.body.pin : "");
   const value = Number(req.body && req.body.value);
-  if (!/^\d+$/.test(pin) || Number(pin) < 0 || Number(pin) > 27) {
-    return res.status(400).json({ ok: false, error: "pin must be BCM 0-27" });
+  // Device agents use rpi-gpio's physical numbering: pins are 40-pin header positions.
+  if (!/^\d+$/.test(pin) || !HEADER_GPIO_PINS.has(Number(pin))) {
+    return res.status(400).json({ ok: false, error: "pin must be a GPIO header pin number" });
   }
   if (value !== 0 && value !== 1) {
     return res.status(400).json({ ok: false, error: "value must be 0 or 1" });
