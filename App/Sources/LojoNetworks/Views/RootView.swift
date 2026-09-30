@@ -51,6 +51,18 @@ struct RootView: View {
             }
         }
         .animation(.spring(duration: 0.35), value: store.toast)
+        .sheet(item: $store.pendingPairing) { offer in
+            NavigationStack {
+                PairingView(offer: offer, inSheet: true)
+            }
+            .interactiveDismissDisabled(store.pairingState == .working)
+        }
+        .onOpenURL(perform: openPairingLink)
+        .task {
+            guard store.launch.confirmPairing, let offer = store.pendingPairing else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            await store.pair(offer)
+        }
         .environmentObject(router)
         .onAppear(perform: applyLaunchOptions)
         .task(id: scenePhase) {
@@ -107,6 +119,22 @@ struct RootView: View {
         }
         .sheet(isPresented: $router.showSetup) {
             SetupView()
+        }
+    }
+
+    /// lojo://pair links arrive here when the owner scans the gateway's QR code with the Camera app.
+    private func openPairingLink(_ url: URL) {
+        guard let offer = PairingOffer(code: url.absoluteString) else {
+            store.show(Toast(style: .error, message: "That link isn't a valid LOJO pairing code."))
+            Haptics.error()
+            return
+        }
+        let wasPresenting = router.showSettings || router.showSetup
+        router.showSettings = false
+        router.showSetup = false
+        Task {
+            if wasPresenting { try? await Task.sleep(for: .milliseconds(600)) }
+            store.pendingPairing = offer
         }
     }
 

@@ -40,6 +40,7 @@ final class ConnectionCheck: ObservableObject {
             CheckStep(id: "phone", title: "This phone's network"),
             CheckStep(id: "lan", title: ConnectionPath.lan.longTitle),
             CheckStep(id: "overlay", title: ConnectionPath.overlay.longTitle),
+            CheckStep(id: "security", title: "Encryption"),
             CheckStep(id: "hub", title: "Cloud hub"),
             CheckStep(id: "devices", title: "Your devices"),
         ]
@@ -57,19 +58,22 @@ final class ConnectionCheck: ObservableObject {
         update("lan", .running)
         update("overlay", .running)
         let eps = store.endpoints()
-        let found = await withTaskGroup(of: PathReport.self) { group in
-            for ep in eps { group.addTask { await PathDiagnostics.run(ep) } }
-            var out: [PathReport] = []
+        let anchor = store.siteCA
+        let found = await withTaskGroup(of: (Int, PathReport).self) { group in
+            for (i, ep) in eps.enumerated() { group.addTask { (i, await PathDiagnostics.run(ep, anchor: anchor)) } }
+            var out: [(Int, PathReport)] = []
             for await r in group { out.append(r) }
             return out
         }
-        reports = found.sorted { $0.path == .lan && $1.path != .lan }
+        reports = found.sorted { $0.0 < $1.0 }.map(\.1)
         let lan = reports.first { $0.path == .lan }
         let overlay = reports.first { $0.path == .overlay }
+        let legacy = reports.first { $0.path == .overlay && $0.protection == .vpnOnly && $0.id != overlay?.id }
         apply(lan, to: "lan")
-        apply(overlay, to: "overlay", vpnOff: !phone.hasVPN)
+        apply(overlay, to: "overlay", vpnOff: !phone.hasVPN, legacy: legacy)
+        applySecurity(anchor: anchor)
 
-        let reached = [lan, overlay].compactMap { $0 }.first(where: \.reachable)
+        let reached = reports.first(where: \.reachable)
         if let net = reached?.probe?.network {
             update("hub", net.hub.connected ? .pass : .fail,
                    net.hub.connected ? "The site gateway is connected to the cloud hub." : "The site gateway is up but can't reach the cloud hub.")
@@ -81,7 +85,7 @@ final class ConnectionCheck: ObservableObject {
             update("devices", .skipped, "Skipped — the site gateway isn't reachable.")
         }
 
-        verdict = Self.verdict(phone: phone, lan: lan, overlay: overlay)
+        verdict = Self.verdict(phone: phone, lan: lan, overlay: overlay, legacy: legacy, paired: store.isPaired)
         switch verdict?.tone {
         case .good: Haptics.success()
         case .caution: Haptics.warning()
@@ -100,9 +104,10 @@ final class ConnectionCheck: ObservableObject {
         out.append("")
         out.append("Phone")
         for l in phoneLines { out.append("  \(l.label): \(l.value)") }
+        out.append("  Pinned site CA: \(store.siteCA?.fullFingerprint ?? "not paired")")
         for r in reports {
             out.append("")
-            out.append("\(r.path.longTitle) — \(r.reachable ? "OK" : "FAILED") (\(r.totalMs) ms)")
+            out.append("\(r.title) — \(r.reachable ? "OK" : "FAILED") (\(r.totalMs) ms)")
             for l in r.lines { out.append("  \(l.label): \(l.value)") }
         }
         out.append("")
@@ -116,34 +121,41 @@ final class ConnectionCheck: ObservableObject {
             DiagLine(label: "Cellular", value: "Active", status: .ok),
             DiagLine(label: "VPN tunnel", value: "utun4 100.96.2.41", status: .ok),
         ]
-        for id in ["phone", "lan", "overlay", "hub", "devices"] {
+        for id in ["phone", "lan", "overlay", "security", "hub", "devices"] {
             update(id, .running)
             try? await Task.sleep(for: .milliseconds(260))
             switch id {
             case "phone": update(id, .pass, "Cellular data · VPN tunnel active")
             case "lan": update(id, .warn, "Not on site Wi‑Fi — expected while you're away.")
-            case "overlay": update(id, .pass, "Site gateway answered in 41 ms.")
+            case "overlay": update(id, .pass, "Site gateway answered in 41 ms over HTTPS.")
+            case "security": update(id, .pass, "HTTPS · pinned site CA 3F:A1:07:5C … 9D:21:E4 · TLS 1.3")
             case "hub": update(id, .pass, "The site gateway is connected to the cloud hub.")
             default: update(id, .pass, "5 online, 1 offline.")
             }
         }
+        let pin = DiagLine(label: "Pin", value: "Site CA 3F:A1:07:5C … 9D:21:E4 (Keychain)", status: .ok)
+        let scheme = DiagLine(label: "Scheme", value: "HTTPS (TLS, pinned site CA)", status: .info)
         reports = [
-            PathReport(path: .lan, address: "http://192.168.20.2:8801", lines: [
-                DiagLine(label: "Address", value: "http://192.168.20.2:8801", status: .info),
+            PathReport(path: .lan, address: "https://192.168.20.2:8443", lines: [
+                DiagLine(label: "Address", value: "https://192.168.20.2:8443", status: .info),
                 DiagLine(label: "Type", value: GatewayAddress.HostClass.privateLAN.title, status: .info),
+                scheme, pin,
                 DiagLine(label: "DNS", value: "Not needed (IP address)", status: .skip),
-                DiagLine(label: "TCP 8801", value: "No TCP answer (timed out) after 5002 ms", status: .fail),
-                DiagLine(label: "HTTP", value: "NSURLErrorTimedOut (-1001) after 5003 ms", status: .fail),
+                DiagLine(label: "TCP 8443", value: "No TCP answer (timed out) after 5002 ms", status: .fail),
+                DiagLine(label: "TLS", value: "Not attempted (no TCP connection)", status: .skip),
+                DiagLine(label: "HTTPS", value: "NSURLErrorTimedOut (-1001) after 5003 ms", status: .fail),
                 DiagLine(label: "Meaning", value: TransportFailure(code: -1001).meaning, status: .info),
-            ], probe: nil, tcpOK: false, totalMs: 10_010),
-            PathReport(path: .overlay, address: "http://100.96.8.2:8801", lines: [
-                DiagLine(label: "Address", value: "http://100.96.8.2:8801", status: .info),
+            ], probe: nil, tcpOK: false, totalMs: 10_010, protection: .tls),
+            PathReport(path: .overlay, address: "https://100.96.8.2:8443", lines: [
+                DiagLine(label: "Address", value: "https://100.96.8.2:8443", status: .info),
                 DiagLine(label: "Type", value: GatewayAddress.HostClass.overlay.title, status: .info),
+                scheme, pin,
                 DiagLine(label: "DNS", value: "Not needed (IP address)", status: .skip),
-                DiagLine(label: "TCP 8801", value: "Connected in 38 ms via utun4 (VPN tunnel) from 100.96.2.41", status: .ok),
-                DiagLine(label: "HTTP", value: "200 OK in 41 ms", status: .ok),
-                DiagLine(label: "Gateway", value: "mesa-gateway · hub connected · arrived via overlay", status: .ok),
-            ], probe: nil, tcpOK: true, totalMs: 84),
+                DiagLine(label: "TCP 8443", value: "Connected in 38 ms via utun4 (VPN tunnel) from 100.96.2.41", status: .ok),
+                DiagLine(label: "TLS", value: "TLS 1.3 · chain verified to site CA · cert until Nov 1, 2027", status: .ok),
+                DiagLine(label: "HTTPS", value: "200 OK in 41 ms", status: .ok),
+                DiagLine(label: "Gateway", value: "mesa-gateway · hub connected · arrived via overlay as https", status: .ok),
+            ], probe: nil, tcpOK: true, totalMs: 84, protection: .tls),
         ]
         verdict = Verdict(
             tone: .good, icon: "lock.shield.fill",
@@ -162,21 +174,49 @@ final class ConnectionCheck: ObservableObject {
         if let detail { steps[i].detail = detail }
     }
 
-    private func apply(_ report: PathReport?, to id: String, vpnOff: Bool = false) {
+    private func apply(_ report: PathReport?, to id: String, vpnOff: Bool = false, legacy: PathReport? = nil) {
         guard let report else {
             update(id, .skipped, "No address configured.")
             return
         }
+        let over = report.protection == .tls ? " over HTTPS" : " over legacy HTTP"
         if report.reachable {
-            update(id, .pass, "Site gateway answered in \(report.probe?.latencyMs ?? 0) ms.")
+            update(id, .pass, "Site gateway answered in \(report.probe?.latencyMs ?? 0) ms\(over).")
         } else {
             let tag = report.probe?.error?.technical ?? "No answer"
             if vpnOff {
                 update(id, .warn, "LOJO VPN not connected — \(tag)")
+            } else if let legacy, legacy.reachable {
+                update(id, .warn, "HTTPS failed (\(tag)); legacy HTTP over VPN answered in \(legacy.probe?.latencyMs ?? 0) ms.")
             } else {
                 update(id, id == "lan" ? .warn : .fail, tag)
             }
         }
+    }
+
+    private func applySecurity(anchor: SiteCA?) {
+        let paired = anchor != nil
+        let secure = reports.filter { $0.protection == .tls }
+        if let ok = secure.first(where: \.reachable) {
+            let version = ok.probe?.tls?.version ?? "TLS"
+            update("security", .pass, "HTTPS · pinned site CA \(anchor?.shortFingerprint ?? "") · \(version)")
+            return
+        }
+        if let tls = secure.lazy.compactMap({ $0.probe?.error?.tlsFailure }).first {
+            update("security", .fail, "\(tls.technical) — \(tls.meaning)")
+            return
+        }
+        if let legacy = reports.first(where: { $0.reachable && $0.protection == .vpnOnly }) {
+            update("security", .warn, paired
+                   ? "Legacy HTTP over VPN (\(legacy.address)) — encrypted by the VPN only; HTTPS didn't answer."
+                   : "Legacy HTTP over VPN — encrypted by the VPN only. Pair this phone for HTTPS.")
+            return
+        }
+        if reports.contains(where: \.reachable) {
+            update("security", .warn, "Unencrypted HTTP on site Wi‑Fi. Pair this phone with the gateway (Settings › Security) to encrypt it.")
+            return
+        }
+        update("security", .skipped, paired ? "Skipped — the site gateway isn't reachable." : "Not paired · skipped — the site gateway isn't reachable.")
     }
 
     private func phoneDetail(_ p: PhoneInterfaces) -> String {
@@ -188,10 +228,22 @@ final class ConnectionCheck: ObservableObject {
         return parts.joined(separator: " · ")
     }
 
-    static func verdict(phone: PhoneInterfaces, lan: PathReport?, overlay: PathReport?) -> Verdict {
+    static func verdict(phone: PhoneInterfaces, lan: PathReport?, overlay: PathReport?, legacy: PathReport?, paired: Bool) -> Verdict {
         let viaLAN = lan?.reachable == true
-        let viaOverlay = overlay?.reachable == true
-        let net = (viaLAN ? lan : overlay)?.probe?.network
+        let viaOverlay = overlay?.reachable == true || legacy?.reachable == true
+        let overlayUsed = overlay?.reachable == true ? overlay : legacy
+        let net = (viaLAN ? lan : overlayUsed)?.probe?.network
+        let securityTip: String? = {
+            let used = viaLAN ? lan : overlayUsed
+            switch used?.protection {
+            case .none?: return "Traffic on site Wi‑Fi isn't encrypted yet. Pair this phone with your gateway in Settings › Security."
+            case .vpnOnly?:
+                return paired
+                    ? "HTTPS didn't answer on the overlay, so the app is using legacy HTTP inside the VPN (still encrypted by the VPN)."
+                    : "Pair this phone with your gateway in Settings › Security so site Wi‑Fi traffic is encrypted too."
+            default: return nil
+            }
+        }()
 
         if let net, !net.hub.connected {
             return Verdict(
@@ -209,15 +261,20 @@ final class ConnectionCheck: ObservableObject {
             if viaOverlay { tips.append("The private overlay also works, so you'll stay connected when you leave.") }
             else if !phone.hasVPN { tips.append("Before you leave the site, turn on your LOJO VPN profile to keep access.") }
             if phone.hasVPN { tips.append("Your VPN is on as well; the app uses whichever path answers, preferring site Wi‑Fi.") }
+            if let securityTip { tips.insert(securityTip, at: 0) }
+            let encrypted = lan?.protection == .tls
             return Verdict(
-                tone: .good, icon: "wifi",
-                title: "You're on site Wi‑Fi",
-                message: "Your phone reaches the site gateway directly on the local network. Traffic stays inside your site — nothing goes over the internet.",
+                tone: encrypted ? .good : .caution, icon: encrypted ? "wifi" : "lock.open.fill",
+                title: encrypted ? "You're on site Wi‑Fi" : "On site Wi‑Fi, unencrypted",
+                message: encrypted
+                    ? "Your phone reaches the site gateway directly on the local network over HTTPS, checked against your site's pinned certificate. Nothing goes over the internet."
+                    : "Your phone reaches the site gateway directly on the local network using legacy HTTP. Nothing goes over the internet, but anyone on this Wi‑Fi could read the traffic.",
                 tips: tips
             )
         }
         if viaOverlay {
             var tips: [String] = []
+            if let securityTip { tips.append(securityTip) }
             if phone.hasWiFi && phone.hasVPN && lan != nil {
                 tips.append("You're on Wi‑Fi too, but with the VPN on iOS sends site addresses through the tunnel, so the direct Wi‑Fi path can't be used. Everything still works through the overlay.")
             }
@@ -229,7 +286,7 @@ final class ConnectionCheck: ObservableObject {
             )
         }
 
-        let reports = [lan, overlay].compactMap { $0 }
+        let reports = [lan, overlay, legacy].compactMap { $0 }
         if let blocked = reports.first(where: { report in
             if case .transport(let f)? = report.probe?.error { return f.isATSBlock }
             return false
@@ -251,6 +308,30 @@ final class ConnectionCheck: ObservableObject {
                     "Open Settings › Privacy & Security › Local Network and turn on LOJO Networks.",
                     "Away from the site? Your LOJO VPN profile works without this permission.",
                 ]
+            )
+        }
+
+        if let refused = reports.first(where: { $0.probe?.error?.tlsFailure != nil }),
+           let tls = refused.probe?.error?.tlsFailure {
+            var tips: [String]
+            switch tls.kind {
+            case .notPaired:
+                tips = ["Scan the gateway's pairing QR code with the iPhone Camera app, or paste the code in Settings › Security."]
+            case .pinMismatch, .pairingMismatch:
+                tips = ["If your installer rotated the site certificate authority, scan the new pairing code.",
+                        "Otherwise, don't pair again — check what's answering at \(refused.address)."]
+            case .hostnameMismatch:
+                tips = ["On the gateway, add this address to SANS in site.env and run scripts/gateway-tls.sh rotate."]
+            case .expired:
+                tips = ["Check the date on this phone.", "On the gateway, run scripts/gateway-tls.sh rotate."]
+            case .untrusted, .handshake:
+                tips = ["Check the address uses the gateway's HTTPS port (8443).", "Share the diagnostics below with LOJO support."]
+            }
+            return Verdict(
+                tone: .bad, icon: "lock.trianglebadge.exclamationmark",
+                title: "Secure connection refused",
+                message: "\(refused.path.title) (\(refused.address)): \(tls.meaning) [\(tls.technical)]",
+                tips: tips
             )
         }
 
@@ -452,10 +533,10 @@ struct ConnectionCheckView: View {
                 if showDiagnostics {
                     DiagBlock(title: "This phone", systemImage: "iphone", ok: nil, lines: check.phoneLines)
                     ForEach(check.reports) { r in
-                        DiagBlock(title: r.path.longTitle, systemImage: r.path.systemImage, ok: r.reachable, lines: r.lines,
+                        DiagBlock(title: r.title, systemImage: r.path.systemImage, ok: r.reachable, lines: r.lines,
                                   footer: "\(r.totalMs) ms total")
                     }
-                    Text("Addresses shown are private network addresses. No passwords or keys are ever displayed.")
+                    Text("Addresses shown are private network addresses. Fingerprints identify public certificates; no passwords or keys are ever displayed.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -468,7 +549,7 @@ struct ConnectionCheckView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("How your phone reaches your devices")
                 .font(.subheadline.weight(.semibold))
-            Text("At the site, the app talks to your site gateway directly over Wi‑Fi. Away from the site, your LOJO VPN profile joins this phone to your private overlay so the same gateway answers — encrypted end to end. The app tries both automatically. Your cameras and controls are never published to the public internet.")
+            Text("At the site, the app talks to your site gateway directly over Wi‑Fi, using HTTPS once this phone is paired. Away from the site, your LOJO VPN profile joins this phone to your private overlay so the same gateway answers — encrypted by the VPN, and by HTTPS inside it. The app tries both automatically. Your cameras and controls are never published to the public internet.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

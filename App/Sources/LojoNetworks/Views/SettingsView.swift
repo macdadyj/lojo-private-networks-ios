@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("lojo.onboarded") private var onboarded = true
     @AppStorage("lojo.appearance") private var appearanceRaw = Appearance.system.rawValue
+    @State private var pastedOffer: PairingOffer?
 
     var body: some View {
         NavigationStack {
@@ -32,6 +33,8 @@ struct SettingsView: View {
                     }
                 }
 
+                SecuritySection(pasted: $pastedOffer)
+
                 Section {
                     AddressRow(path: .lan, text: $store.lanAddress, active: store.link.path == .lan)
                     AddressRow(path: .overlay, text: $store.overlayAddress, active: store.link.path == .overlay)
@@ -43,7 +46,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Gateway addresses")
                 } footer: {
-                    Text("Enter an IP address or host name; the port defaults to 8801. The app tries both paths at once and uses site Wi‑Fi when it answers, otherwise the private overlay. Overlay addresses only work while your LOJO VPN profile is connected.")
+                    Text("Enter an IP address or host name. https:// addresses default to port 8443 and need pairing; plain addresses use legacy HTTP on port 8801. The app tries both paths at once and uses site Wi‑Fi when it answers, otherwise the private overlay. Overlay addresses only work while your LOJO VPN profile is connected.")
                 }
 
                 Section("Appearance") {
@@ -77,6 +80,9 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $pastedOffer) { offer in
+                PairingView(offer: offer)
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -168,14 +174,15 @@ struct AddressRow: View {
     private func test() async {
         guard let url = GatewayAddress.normalize(text) else { return }
         testing = true
-        result = await PathDiagnostics.run(GatewayEndpoint(path: path, baseURL: url))
+        result = await PathDiagnostics.run(GatewayEndpoint(path: path, baseURL: url), anchor: store.siteCA)
         testing = false
         if result?.reachable == true { Haptics.success() } else { Haptics.warning() }
     }
 
     private func summary(_ r: PathReport) -> String {
         if let net = r.probe?.network {
-            return "\(net.gateway.name) answered in \(r.probe?.latencyMs ?? 0) ms."
+            let how = r.protection == .tls ? "over HTTPS (pinned)" : "over legacy HTTP"
+            return "\(net.gateway.name) answered in \(r.probe?.latencyMs ?? 0) ms \(how)."
         }
         let code = r.probe?.error?.technical ?? "No answer"
         if vpnOffForOverlay {

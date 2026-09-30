@@ -7,6 +7,7 @@ struct SetupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var phone = PhoneInterfaces.current()
     @State private var round = 0
+    @State private var pastedOffer: PairingOffer?
 
     var body: some View {
         NavigationStack {
@@ -28,6 +29,8 @@ struct SetupView: View {
                     TextField("Network name", text: $store.networkName)
                         .textInputAutocapitalization(.words)
                 }
+
+                SecuritySection(pasted: $pastedOffer)
 
                 Section {
                     AddressRow(path: .lan, text: $store.lanAddress, active: store.link.path == .lan, autoTest: round)
@@ -63,6 +66,9 @@ struct SetupView: View {
             }
             .navigationTitle("Setup")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $pastedOffer) { offer in
+                PairingView(offer: offer)
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {

@@ -128,6 +128,10 @@ struct ConnectionHealthCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let protection = store.protection {
+                        ProtectionPill(protection: protection)
+                            .padding(.top, 3)
+                    }
                     if let codes = store.failureSummary, !codes.isEmpty {
                         Text(codes)
                             .font(.caption2.monospaced())
@@ -145,7 +149,7 @@ struct ConnectionHealthCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title). \(subtitle)")
+        .accessibilityLabel("\(title). \(subtitle). \(store.protection?.label ?? "")")
         .accessibilityHint("Opens the connection check")
         .padding(.top, 4)
     }

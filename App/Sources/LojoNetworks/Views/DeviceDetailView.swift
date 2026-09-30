@@ -265,6 +265,9 @@ struct DeviceDetailView: View {
             } else if store.isDemo {
                 FactRow(label: "Reached via", value: ConnectionPath.overlay.longTitle)
             }
+            if let protection = store.protection {
+                FactRow(label: "Encryption", value: protection.label)
+            }
             if let loc = device.location {
                 FactRow(label: "Location", value: String(format: "%.4f, %.4f", loc.lat, loc.lon))
                 FactRow(label: "Location source", value: loc.sourceText)

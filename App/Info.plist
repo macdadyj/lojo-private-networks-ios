@@ -5,21 +5,25 @@
 	<key>CFBundleDisplayName</key>
 	<string>LOJO Networks</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1</string>
+	<string>1.2</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LOJO Networks talks to your site gateway on the local network to show your devices, camera stills and controls. Nothing is sent to the public internet.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!--
-		The site gateway is plain HTTP on the site LAN (RFC 1918) and on the private overlay
-		(100.64.0.0/10, CGNAT space, encrypted by the VPN). Do NOT add NSAllowsLocalNetworking:
-		when it is present iOS ignores NSAllowsArbitraryLoads and only exempts RFC 1918 and
-		.local hosts, so every overlay request fails with NSURLError -1022.
-		NSExceptionDomains cannot express IP ranges, so it is no alternative.
-		-->
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
+	<!--
+	No NSAppTransportSecurity exceptions: URLSession only speaks HTTPS (pinned to the site CA,
+	see docs/tls.md). The labelled legacy-HTTP fallback runs on Network.framework (PlainHTTP.swift),
+	which ATS does not govern.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.lojo.PrivateNetworks.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lojo</string>
+			</array>
+		</dict>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
