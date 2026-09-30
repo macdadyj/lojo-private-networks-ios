@@ -39,6 +39,10 @@ struct MapScreen: View {
         VStack(spacing: 0) {
             if clusters.isEmpty {
                 emptyMap
+            } else if store.isDemo {
+                DemoSiteMap(clusters: clusters, selected: $selected)
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .bottom) { selectionCard }
             } else {
                 map
                     .frame(maxHeight: .infinity)
@@ -55,7 +59,7 @@ struct MapScreen: View {
             if store.isDemo {
                 ToolbarItem(placement: .topBarLeading) { DemoBadge() }
             }
-            if !clusters.isEmpty {
+            if !clusters.isEmpty && !store.isDemo {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         withAnimation { position = .automatic }
