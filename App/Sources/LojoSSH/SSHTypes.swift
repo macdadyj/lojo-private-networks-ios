@@ -92,6 +92,18 @@ public enum SSHClientError: Error, Sendable, Equatable, CustomStringConvertible 
             return .connectFailed(why)
         }
         #endif
+        if let e = error as? NIOSSHError {
+            switch e.type {
+            case .tcpShutdown, .creatingChannelAfterClosure:
+                return .disconnected("the server closed the connection")
+            case .keyExchangeNegotiationFailure, .unsupportedVersion:
+                return .connectFailed("no SSH algorithms in common with the server")
+            case .channelSetupRejected:
+                return .channelRejected("the session")
+            default:
+                return .disconnected("SSH protocol error (\(e.type))")
+            }
+        }
         if let e = error as? ChannelError {
             switch e {
             case .connectTimeout: return .connectFailed("timed out")
