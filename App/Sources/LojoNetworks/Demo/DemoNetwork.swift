@@ -110,7 +110,8 @@ struct DemoNetwork {
             hub: .init(connected: true, since: ISODate.string(startedAt), lastError: nil, lastListAt: nil),
             devices: .init(online: online, offline: devices.count - online, total: devices.count),
             arrivedVia: "overlay",
-            serverTime: ISODate.string(Date())
+            serverTime: ISODate.string(Date()),
+            site: .init(name: name)
         )
     }
 

@@ -114,6 +114,7 @@ final class NetworkStore: ObservableObject {
         static let pairedLAN = "lojo.pairedLAN"
         static let pairedOverlay = "lojo.pairedOverlay"
         static let legacyOverVPN = "lojo.legacyOverVPN"
+        static let adoptedName = "lojo.adoptedSiteName"
     }
 
     init(launch: LaunchOptions = .current, defaults: UserDefaults = .standard) {
@@ -290,7 +291,7 @@ final class NetworkStore: ObservableObject {
                     overlayAddress = ov
                     defaults.set(ov, forKey: Keys.pairedOverlay)
                 }
-                if networkName == Self.defaultName { networkName = offer.name }
+                adoptSiteName(net.site?.name ?? offer.name)
                 siteCA = ca
                 pendingPairing = nil
                 pairingState = .idle
@@ -322,6 +323,17 @@ final class NetworkStore: ObservableObject {
         link = .connecting
         show(Toast(style: .warning, message: "Pairing removed. The app now uses unencrypted HTTP on site Wi‑Fi."))
         Task { await refreshAfterTrustChange() }
+    }
+
+    /// Follows the name the site's gateway (or pairing code) gives, unless the user typed their own
+    /// in Settings: only the default or a previously adopted name is replaced.
+    private func adoptSiteName(_ name: String?) {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
+              name != networkName else { return }
+        let adopted = defaults.string(forKey: Keys.adoptedName)
+        guard networkName == Self.defaultName || networkName == adopted else { return }
+        networkName = name
+        defaults.set(name, forKey: Keys.adoptedName)
     }
 
     private static func legacyAddress(_ address: String, fallback: String) -> String {
@@ -411,6 +423,8 @@ final class NetworkStore: ObservableObject {
             async let e = c.events()
             let (net, devs, evs) = try await (n, d, e)
             network = net
+            // Only a pinned HTTPS answer may rename the site.
+            if ep.secure { adoptSiteName(net.site?.name) }
             devices = devs
             events = evs
             latencyMs = Int(Date().timeIntervalSince(start) * 1000)

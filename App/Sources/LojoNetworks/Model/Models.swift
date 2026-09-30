@@ -85,6 +85,10 @@ struct GatewayNetwork: Codable, Sendable, Hashable {
         var leafNotAfter: String?
     }
 
+    struct Site: Codable, Sendable, Hashable {
+        var name: String?
+    }
+
     var ok: Bool
     var version: String?
     var gateway: Gateway
@@ -96,6 +100,8 @@ struct GatewayNetwork: Codable, Sendable, Hashable {
     /// "https" or "http" as the gateway saw this request (1.4.0+).
     var scheme: String?
     var tls: TLS?
+    /// The site's display name from the gateway's site settings (1.4.1+).
+    var site: Site?
 }
 
 struct Device: Codable, Identifiable, Hashable, Sendable {

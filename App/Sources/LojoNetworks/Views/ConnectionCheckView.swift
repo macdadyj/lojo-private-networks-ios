@@ -155,6 +155,7 @@ final class ConnectionCheck: ObservableObject {
                 DiagLine(label: "TLS", value: "TLS 1.3 · chain verified to site CA · cert until Nov 1, 2027", status: .ok),
                 DiagLine(label: "HTTPS", value: "200 OK in 41 ms", status: .ok),
                 DiagLine(label: "Gateway", value: "mesa-gateway · hub connected · arrived via overlay as https", status: .ok),
+                DiagLine(label: "Site", value: "Juniper Mesa Ranch", status: .info),
             ], probe: nil, tcpOK: true, totalMs: 84, protection: .tls),
         ]
         verdict = Verdict(

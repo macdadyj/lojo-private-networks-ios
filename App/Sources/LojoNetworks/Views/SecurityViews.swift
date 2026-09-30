@@ -215,9 +215,9 @@ struct SecuritySection: View {
 
     @ViewBuilder
     private func pairedDetails(_ ca: SiteCA) -> some View {
-        LabeledContent("Site CA", value: ca.subject)
+        LabeledContent("Site", value: store.network?.site?.name ?? store.networkName)
         VStack(alignment: .leading, spacing: 4) {
-            Text("Fingerprint (SHA-256)").font(.subheadline)
+            Text("Site CA fingerprint (SHA-256)").font(.subheadline)
             Text(SiteCA.fingerprintLines(ca.sha256, perLine: 16))
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)

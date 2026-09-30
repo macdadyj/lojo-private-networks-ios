@@ -108,6 +108,9 @@ enum PathDiagnostics {
             if let via = net.arrivedVia { gw += " · arrived via \(via)" }
             if let scheme = net.scheme { gw += " as \(scheme)" }
             lines.append(DiagLine(label: "Gateway", value: gw, status: net.hub.connected ? .ok : .fail))
+            if let name = net.site?.name {
+                lines.append(DiagLine(label: "Site", value: name, status: .info))
+            }
             if let seen = net.seenFrom {
                 lines.append(DiagLine(label: "Seen as", value: seen, status: .info))
             }
