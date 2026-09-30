@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Read-only SSH directory for the LOJO Networks Terminal tab, run on the gateway over SSH exec.
+
+Lists Connexa devices and connectors (names + overlay IPv4 only; no IDs, users or secrets), the
+LOJO-routed subnets, optional routed hosts from ~/.config/lojo-ssh-directory/extra.json, and
+whether each online address answers on its SSH port. Nothing is written except a short cache.
+
+  lojo-ssh-directory --json          JSON for the app (cached 120 s)
+  lojo-ssh-directory --json --fresh  ignore the cache
+
+extra.json: [{"name": "shop-pi", "address": "192.168.7.x", "group": "Pis", "user": "pi", "port": 22}]
+"""
+import ipaddress
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+HOME = os.path.expanduser("~")
+CACHE = os.path.join(HOME, ".cache", "lojo-ssh-directory.json")
+EXTRA = os.path.join(HOME, ".config", "lojo-ssh-directory", "extra.json")
+CONNEXA = os.environ.get("LOJO_CONNEXA", os.path.join(HOME, ".local", "bin", "connexa"))
+OVERLAY = ipaddress.ip_network("100.64.0.0/10")
+TTL = 120
+
+
+def connexa(path):
+    out = subprocess.run([CONNEXA, "get", path], capture_output=True, text=True, timeout=30, check=True).stdout
+    data = json.loads(out)
+    return data.get("content", data) if isinstance(data, dict) else data
+
+
+def ipv4(cidr):
+    try:
+        return str(ipaddress.ip_interface(cidr).ip) if cidr else None
+    except ValueError:
+        return None
+
+
+def private(address, routes):
+    ip = ipaddress.ip_address(address)
+    return ip in OVERLAY or any(ip in r for r in routes)
+
+
+def ssh_open(address, port):
+    try:
+        with socket.create_connection((address, port), timeout=1.5):
+            return True
+    except OSError:
+        return False
+
+
+def build():
+    networks = connexa("/api/v1/networks?size=100")
+    routes = []
+    entries = []
+    for net in networks:
+        for r in net.get("routes", []):
+            if r.get("type") == "IP_V4" and r.get("subnet"):
+                routes.append(ipaddress.ip_network(r["subnet"], strict=False))
+        for c in net.get("connectors", []):
+            entries.append({
+                "name": c.get("name") or net.get("name") or "connector",
+                "address": ipv4(c.get("ipV4Address")),
+                "kind": "connector",
+                "group": "Connectors",
+                "online": c.get("connectionStatus") == "ONLINE",
+            })
+    for d in connexa("/api/v1/devices?size=200"):
+        entries.append({
+            "name": d.get("name") or "device",
+            "address": ipv4(d.get("ipV4Address")),
+            "kind": "device",
+            "group": "Overlay devices",
+            "online": d.get("connectionStatus") == "ONLINE",
+        })
+    if os.path.exists(EXTRA):
+        with open(EXTRA, encoding="utf-8") as f:
+            for x in json.load(f):
+                entries.append({
+                    "name": x["name"], "address": x["address"], "kind": "routed",
+                    "group": x.get("group", "Routed hosts"), "user": x.get("user"),
+                    "port": int(x.get("port", 22)), "online": True,
+                })
+
+    entries = [e for e in entries if e["address"] and private(e["address"], routes)]
+    for e in entries:
+        e.setdefault("port", 22)
+        e.setdefault("user", None)
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        results = pool.map(lambda e: e["online"] and ssh_open(e["address"], e["port"]), entries)
+    for e, ok in zip(entries, results):
+        e["sshOpen"] = bool(ok)
+    entries.sort(key=lambda e: (not e["online"], not e["sshOpen"], e["group"], e["name"].lower()))
+    return {
+        "version": 1,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "gateway": socket.gethostname(),
+        "routes": [str(r) for r in routes],
+        "devices": entries,
+    }
+
+
+def main():
+    if "--json" not in sys.argv:
+        print(__doc__.strip())
+        return 2
+    if "--fresh" not in sys.argv and os.path.exists(CACHE) and time.time() - os.path.getmtime(CACHE) < TTL:
+        with open(CACHE, encoding="utf-8") as f:
+            sys.stdout.write(f.read())
+        return 0
+    text = json.dumps(build(), separators=(",", ":"))
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    tmp = CACHE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, CACHE)
+    sys.stdout.write(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
