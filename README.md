@@ -210,9 +210,10 @@ scripts/phone-shot.sh OUT.png [KEY=VALUE ...]    # launches (kills existing) the
 |---|---|
 | `LOJO_DEMO` | `1` demo network, `0` live gateway (persisted) |
 | `LOJO_SCREEN` | `home`, `detail`, `activity`, `map`, `check`, `onboarding`, `setup`, `settings`, `terminal` |
-| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `settings` |
+| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `settings`, `edit` (the gateway host) |
 | `LOJO_SSH_CONNECT` | with `terminal`: host label to open a session to (`gateway` = the seeded site gateway) |
 | `LOJO_SSH_REDACT` | `1` masks IP addresses in the Terminal tab (use for every screenshot) |
+| `LOJO_SSH_REFRESH` | `1` pulls the gateway device list at launch even if the cached one is fresh |
 | `LOJO_SSH_RUN`, `LOJO_SSH_TRUST_FP`, `LOJO_SSH_GATEWAY_PORT`, `LOJO_SSH_ENSURE_KEY` | debug builds only; see [`docs/ssh-terminal.md`](docs/ssh-terminal.md) §8 |
 | `LOJO_DEVICE` | key or name for `detail`, e.g. `north-gate`, `SantaWebcam` |
 | `LOJO_CONFIRM_GPIO` | pin; opens the GPIO confirmation sheet on `detail` (nothing is sent) |
@@ -327,6 +328,23 @@ drawn site plan; the live map is deliberately not captured because live position
 | `17-pairing.png` | Pairing sheet after scanning the QR code (addresses, CA fingerprint, Pair) |
 | `18-tls-refused.png` / `19-tls-refused-diagnostics.png` | A different CA answering: "Secure connection refused", `TLS pin mismatch` with the presented root |
 | `20-home-unpaired.png` | Not paired: **Unencrypted (legacy HTTP)** label |
+
+Terminal tab (all with `LOJO_SSH_REDACT=1`; live shells are against the temporary test server on santa, see [`docs/ssh-terminal.md`](docs/ssh-terminal.md) §8):
+
+| File | Screen |
+|---|---|
+| `ssh-01-first-run.png` | First run with the VPN off: VPN gate, key setup prompt, seeded gateway (disabled) |
+| `ssh-02-keys.png` | SSH keys: a Secure Enclave P-256 key made on the phone |
+| `ssh-03-session-vpn-off.png` | Session opened with the VPN off: refused before any packet, with the key bar |
+| `ssh-04-settings.png` | Font size, themes, address masking |
+| `ssh-05-host-editor.png` | Host editor (address masked, key choice, host key section) |
+| `ssh-06-host-key-prompt.png` | First connection: host key type and full SHA256 fingerprint, Trust and connect |
+| `ssh-07-shell.png` | Live shell over the overlay with the Secure Enclave key: PTY size, xterm-256color, ANSI colours |
+| `ssh-08-gateway-devices.png` | Gateway devices pulled over SSH (`lojo-ssh-directory`), SSH-open first, "This iPhone" marked |
+| `ssh-09-tabs.png` | Two sessions in the tab strip |
+| `ssh-10-reconnected.png` | Server dropped the connection; automatic reconnect with a banner |
+| `ssh-11-exit.png` | Clean `exit`: "Session ended (exit 0)", no auto-reconnect |
+| `ssh-12-host-key-changed.png` | Changed host key: connection refused, saved and offered fingerprints |
 
 ## Hard rules (from `~/CURSOR_ONBOARDING.md`)
 

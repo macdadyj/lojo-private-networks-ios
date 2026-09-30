@@ -43,14 +43,14 @@ Every sshd that answered offers `curve25519-sha256`, `ecdh-sha2-nistp256`, `aes1
 
 ## 3. Device inventory and what each device would need
 
-The probe was run from santa (overlay address `100.96.1.18`) on 2026-09-30. **No device config was changed.**
+The probe was run from santa (overlay address `100.96.1.18`) on the morning of 2026-09-30. **No device config was changed.** By about 10:00 the vision Pi was OFFLINE in Connexa and neither it nor the `192.168.7.42` Pi answered on port 22 from santa. The directory reports that live, so they show as offline or "no SSH" until they're back.
 
 | Device (Connexa name) | Overlay path | sshd now | Auth offered | Needs, and all of it waits for Jon's OK |
 |---|---|---|---|---|
 | **santacomputa** (gateway) | `100.96.1.18` | **None.** `openssh-server` isn't installed. | — | `sudo apt install openssh-server`. A drop-in `/etc/ssh/sshd_config.d/10-lojo.conf` with `ListenAddress 100.96.1.18`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`, `AllowUsers jon`. On Ubuntu 24.04 sshd is socket-activated, so `ssh.socket` also needs `FreeBind=yes`; otherwise it can't bind the overlay address before `tun0` is up. Then add the phone's public key to `~jon/.ssh/authorized_keys`, and keep port 22 un-forwarded on the home router. |
 | **labMachine** | `100.96.1.90` | OpenSSH 9.6p1 | publickey, password | Add the phone key to `jon`'s `~/.ssh/authorized_keys`. Recommended: `PasswordAuthentication no`, and `ListenAddress` on the overlay or a firewall rule if it has a public interface. |
 | **visiondeploy** / LabWebcam Pi | `100.96.1.115` (its LAN `192.168.7.124` is filtered from santa) | OpenSSH 7.9p1 (Raspbian 10) | publickey, password, keyboard-interactive | Add the phone key to `pi`'s `~/.ssh/authorized_keys`. Recommended: turn off password and keyboard-interactive. Buster is EOL, but its algorithm set is compatible. |
-| Pi at `192.168.7.42` | Through the publican/speakeasy route `192.168.7.0/24` | OpenSSH 7.9p1 | publickey, password | Same as the vision Pi. Name it in the directory once Jon says which node it is. |
+| Pi at `192.168.7.42` | Through the publican/speakeasy route `192.168.7.0/24` | OpenSSH 7.9p1 | publickey, password | Same as the vision Pi. Listed in the gateway directory as "Routed Pi (shop LAN)" until Jon says which node it is. |
 | **gcpegress** (GCE) | `10.128.0.3` through the montanoGCPegress route | OpenSSH 8.2p1 | publickey only | The key has to go in through instance or project metadata `ssh-keys` (a GCP change). **Separately: GCP rule `default-allow-ssh` allows tcp:22 from `0.0.0.0/0`, and the VM has an external IP, so its sshd is reachable from the public internet today.** Recommend limiting that rule to `35.235.240.0/20` (IAP) or deleting it. RDP (`default-allow-rdp`, 3389) is open the same way. Not changed. |
 | speakeasy connector | `100.96.1.54` | Closed | — | None. It's a connector address, not a host. |
 | montanogcpegress connector | `100.96.1.66` | Closed | — | None. Connector address. |
@@ -117,7 +117,20 @@ SwiftTerm TerminalView ⇄ TerminalSession (@MainActor) ⇄ ShellChannel ⇄ NIO
 
 - **santa, same code:** `tools/ssh-smoke` builds the `LojoSSH` sources for Linux and checks overlay policy, key import (Ed25519 and P-256), first-use trust, exec, pings, PTY shell with window-change and exit status, reconnect from known_hosts, P-256 user auth, refusal of a changed host key, rejection of an unknown user key, and a closed port. Run it with `scripts/test-sshd.sh smoke`.
 - **santa test server:** santa has no system sshd, so `scripts/test-sshd.sh start` runs a temporary **userland** OpenSSH 9.6 server extracted from the matching Ubuntu package. It uses no sudo and no system config, binds only to `100.96.1.18:2222`, is key-only, allows only `jon`, and keeps its own `authorized_keys` under `~/.cache/lojo-ssh-test/`. Stop it with `scripts/test-sshd.sh stop`.
-- **Phone:** `LOJO_BUILD_DIR=~/.local/share/ios-dev/apps/LojoNetworksSSH scripts/deploy-phone.sh` (a separate ext4 build dir, so other work in the default build dir is left alone), then `scripts/phone-shot.sh`. QA launch variables: `LOJO_SCREEN=terminal`, `LOJO_SSH_SCREEN=hosts|keys|settings`, `LOJO_SSH_CONNECT=<host label>`, `LOJO_SSH_REDACT=1` (mask addresses in screenshots). DEBUG builds only: `LOJO_SSH_RUN=<command>` types a command once the shell is up; `LOJO_SSH_TRUST_FP=SHA256:…` auto-trusts a first-use host key **only if** its fingerprint equals the one given; `LOJO_SSH_GATEWAY_PORT` points the seeded gateway host at the test server; `LOJO_SSH_ENSURE_KEY=1` creates a Secure Enclave key if none exists. DEBUG builds also write the public keys (only) to `Documents/lojo-ssh-public-keys.txt`, so the USB-attached Mac or Linux box can pull them with `pymobiledevice3 apps pull` and add them to a test `authorized_keys`.
+- **Phone:** `LOJO_BUILD_DIR=~/.local/share/ios-dev/apps/LojoNetworksSSH scripts/deploy-phone.sh` (a separate ext4 build dir, so other work in the default build dir is left alone), then `scripts/phone-shot.sh`. QA launch variables: `LOJO_SCREEN=terminal`, `LOJO_SSH_SCREEN=hosts|keys|settings|edit` (edit opens the gateway host), `LOJO_SSH_CONNECT=<host label>`, `LOJO_SSH_REDACT=1` (mask addresses in screenshots), `LOJO_SSH_REFRESH=1` (pull the device list at launch). DEBUG builds only: `LOJO_SSH_RUN=<command>` types a command once the shell is up; `LOJO_SSH_TRUST_FP=SHA256:…` auto-trusts a first-use host key **only if** its fingerprint equals the one given; `LOJO_SSH_GATEWAY_PORT` points the seeded gateway host at the test server; `LOJO_SSH_ENSURE_KEY=1` creates a Secure Enclave key if none exists. DEBUG builds also write the public keys (only) to `Documents/lojo-ssh-public-keys.txt`, so the USB-attached Mac or Linux box can pull them with `pymobiledevice3 apps pull` and add them to a test `authorized_keys`.
+
+### 8.1 Verified on the iPhone 11 (2026-09-30)
+
+Debug build installed with `deploy-phone.sh`, driven with the QA variables above; screenshots are in `docs/screenshots/ssh-*.png` (index in the README).
+
+- **MVP:** a live shell from the phone to the santa test server (`100.96.1.18:2222`) over the LOJO overlay (phone tunnel `utun`, overlay address), authenticated with a **Secure Enclave P-256 key generated on the phone**. The server log shows `Accepted publickey for jon … ECDSA SHA256:Qb+F7…` (the phone's key). PTY size tracks the view (51×26 with the keyboard up), `TERM=xterm-256color`, ANSI colours render, and the Esc/Ctrl/Tab/arrow key bar works.
+- **First-use host key:** the prompt shows type and full fingerprint, matching `scripts/test-sshd.sh fingerprint`.
+- **Changed host key:** with a different key planted in the phone's `known_hosts` (pushed over USB, then restored), the phone refuses and shows the red screen; the server log shows `Connection closed … [preauth]`, so no login happened.
+- **Gateway devices:** pulled over SSH exec of `lojo-ssh-directory` once the gateway key was trusted, SSH-open devices first, the phone's own profile marked "This iPhone".
+- **Tabs and reconnect:** two concurrent sessions; killing their server-side processes shows "connection lost", then both reconnect about a second later with a "reconnected" banner.
+- **Clean exit:** `exit 0` ends the session with "Session ended (exit 0)" and no reconnect.
+- **VPN gate:** with the tunnel down, hosts are disabled and a forced connect is refused before any packet with "Turn on LOJO VPN".
+- **Not verified on the phone:** password auth (the test server is key-only, so the password prompt path is untested), OSC 52 clipboard prompt, a two-missed-ping drop (needs a network black hole rather than a clean close), iOS background/foreground resume, and import of a pasted private key (covered by the Linux smoke test's parser checks).
 
 ## 9. Later: port forwarding (design only)
 
@@ -136,12 +149,13 @@ SwiftTerm TerminalView ⇄ TerminalSession (@MainActor) ⇄ ShellChannel ⇄ NIO
 
 - The bundle is the same (`XTL-HG9HAYXW44.com.lojo.PrivateNetworks`), so `scripts/deploy-phone.sh` works as before. `scripts/sync-app.sh` now also fetches the pinned SwiftTerm into the build copy.
 - The free provisioning profile expires around 6 Oct 2026. Re-run `scripts/deploy-phone.sh` to re-sign.
+- Twice on 2026-09-30, `xtool dev run` stalled after "Installing 100%" while the app was open on the phone, which left it half-installed (launch fails with CoreDevice error 10002). Running `deploy-phone.sh` again installed it normally in about 20 s. Wrap unattended deploys in `timeout 420`.
 - Check `pgrep -af xtool` before any USB deploy. The script also refuses to install while another `xtool dev run` is active (compile-only `--build` still runs).
 
 ## 12. Decisions for Jon
 
 1. Install `openssh-server` on santa, bound to the overlay only (section 3)? Until then the MVP test uses the temporary userland server on `100.96.1.18:2222`.
-2. Turn on OpenVPN Connect on the phone for the live SSH test. The app won't SSH without the VPN tunnel.
+2. The phone's VPN profile is the Connexa device named `device_1790719767795`. Rename it (e.g. "Jon's iPhone") so the directory and the Network tab read better?
 3. Which devices get the phone's public key (labMachine `jon`, vision Pi `pi`, 192.168.7.42 `pi`, gcpegress metadata)?
 4. GCP `default-allow-ssh` and `default-allow-rdp` are open to `0.0.0.0/0`. Restrict them?
 5. Should Face ID be required for each use of the Secure Enclave key? It would prompt on every auto-reconnect.
