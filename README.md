@@ -11,6 +11,7 @@ with a **free Apple ID**, and installed over **USB** on Jon's iPhone 11. There's
 and no Simulator; "run" means the physical phone.
 
 - Design and plan: [`docs/design.md`](docs/design.md)
+- HTTPS design (per-site CA, pinning, QR pairing, legacy fallback): [`docs/tls.md`](docs/tls.md)
 - Phone screenshots: [`docs/screenshots/`](docs/screenshots/) (index below)
 - Draft PR history: refinement passes are separate commits
 
@@ -22,26 +23,29 @@ and no Simulator; "run" means the physical phone.
 |---|---|
 | `App/` | xtool project. `xtool.yml` (bundle `com.lojo.PrivateNetworks`, on-device `XTL-HG9HAYXW44.com.lojo.PrivateNetworks`), `Info.plist`, `Resources/AppIcon.png`, `Sources/LojoNetworks/` |
 | `App/Sources/LojoNetworks/Model` | Codable models for the gateway `v1` API, naming rules, event kinds |
-| `App/Sources/LojoNetworks/Services` | `GatewayClient` (HTTP, probes, exact error codes and wording), `GatewayAddress` (normalise/classify addresses), `PathDiagnostics` (DNS/TCP/HTTP per-path report), `PhoneInterfaces` (Wi‑Fi/cellular/VPN detection) |
+| `App/Sources/LojoNetworks/Services` | `GatewayClient` (pinned HTTPS via URLSession, legacy HTTP via `PlainHTTP`, probes, pairing, exact error codes and wording), `SiteTrust` (site CA in the Keychain, pairing code parser, pinning delegate, TLS failure reasons), `PlainHTTP` (HTTP/1.1 on Network.framework for the labelled fallback), `GatewayAddress` (normalise/classify addresses), `PathDiagnostics` (DNS/TCP/TLS/HTTP per-path report), `PhoneInterfaces` (Wi‑Fi/cellular/VPN detection) |
 | `App/Sources/LojoNetworks/Store` | `NetworkStore` (state, LAN→overlay failover, capture/GPIO flows, demo), `LaunchOptions` (QA hooks) |
-| `App/Sources/LojoNetworks/Views` | Home, Device detail, Activity, Map, Connection check, Onboarding, Setup, Settings |
+| `App/Sources/LojoNetworks/Views` | Home, Device detail, Activity, Map, Connection check, Onboarding, Setup, Settings, pairing sheet and Security section (`SecurityViews`) |
 | `App/Sources/LojoNetworks/Demo` | Demo network "Juniper Mesa Ranch", procedurally drawn camera stills and site plan |
 | `App/Sources/LojoNetworks/Design` | Theme, cards, status dots, buttons, haptics, toasts |
 | `sidecar/` | Site gateway `ranch-field-api` (Node 20). Source of truth for `~/.local/share/ranch-field-api/` |
-| `scripts/` | `deploy-phone.sh`, `sync-app.sh`, `phone-shot.sh`, `deploy-sidecar.sh`, `make-icon.py` |
-| `docs/` | Design doc, screenshots |
+| `scripts/` | `deploy-phone.sh`, `sync-app.sh`, `phone-shot.sh`, `deploy-sidecar.sh`, `gateway-tls.sh` (site CA, server cert, rotation, pairing QR), `make-icon.py` |
+| `docs/` | Design doc, HTTPS design, screenshots |
 
 ## Architecture
 
 ```
-iPhone app ──HTTP :8801──▶ site gateway (santacomputa, ranch-field-api)
-  LAN   http://192.168.7.103:8801          │ Socket.IO
-  VPN   http://100.96.1.18:8801            ▼
-                                  overlay proxy 100.96.1.18:8788 ──▶ Cloud Run Pub-Node (pub-node-test)
+iPhone app ──HTTPS :8443 (pinned site CA)──▶ site gateway (santacomputa, ranch-field-api 1.4)
+  LAN   https://192.168.7.103:8443                 │ Socket.IO
+  VPN   https://100.96.1.18:8443                   ▼
+  legacy HTTP :8801 (unpaired phones,      overlay proxy 100.96.1.18:8788 ──▶ Cloud Run Pub-Node (pub-node-test)
+    old Ranch Field app, VPN fallback)
 ```
 
-The phone only ever talks HTTP to the gateway. GPIO goes out as `controlState` to the **Cloud Run**
-Pub-Node. **App Engine Flex production is never used.** The app tries LAN first, then the overlay.
+Paired phones talk HTTPS to the gateway on both paths; see [`docs/tls.md`](docs/tls.md). The HTTP
+listener on :8801 and every legacy route are unchanged. GPIO goes out as `controlState` to the
+**Cloud Run** Pub-Node. **App Engine Flex production is never used.** The app tries LAN first,
+then the overlay.
 
 ## Rebuild and redeploy (santacomputa)
 
@@ -76,6 +80,13 @@ the build dir is disposable. Signing on NTFS (`LOJODESKDRIVE`) fails with `0xe80
 4. The first time the app goes live, iOS asks **“Allow ‘LOJO Networks’ to find devices on local
    networks?” → tap Allow**. Without it the LAN path is blocked, and the Connection check says so.
    You can change it later in Settings → Privacy & Security → Local Network → LOJO Networks.
+5. **Pair the phone with the gateway (turns on HTTPS).** On santa run
+   `scripts/gateway-tls.sh pair`. It prints a QR code in the terminal and writes
+   `~/.local/state/ranch-field-api/tls/pairing-qr.png`. On the phone (on site Wi‑Fi or the VPN),
+   open the **Camera** app, point it at the QR code, tap the **“Open in LOJO Networks”** banner,
+   check the fingerprint matches the one the command printed, and tap **Pair**. Home should then
+   show **Encrypted · pinned**. Without a camera handy: copy the `lojo://pair?…` line to the
+   phone and use Settings → Security → **Paste pairing code**.
 
 **Install stall while that prompt is on screen.** If the app is in the foreground showing the
 Local Network prompt (or any system alert) when you reinstall, `xtool dev run` can hang at
@@ -119,6 +130,44 @@ doesn't re-announce a device that drops and rejoins within a second or two.
 | GET | `/v1/devices` | Roster incl. offline devices (keyed by stable name), camera, GPIO, `location {lat,lon,source}` |
 | GET | `/v1/events?limit=&device=` | Activity log (ring of 300, persisted in `~/.local/state/ranch-field-api/state.json`) |
 
+All routes are served on both HTTP :8801 and HTTPS :8443. `/v1/network` adds `scheme` and
+`tls {enabled, port, caSha256, leafSha256, leafNotAfter}`. `capture.requested` and `gpio.set`
+events record the `scheme` they arrived on.
+
+### Gateway HTTPS: setup and rotation
+
+Design and failure codes: [`docs/tls.md`](docs/tls.md). One script does everything; it never
+prints or commits a private key.
+
+```bash
+scripts/gateway-tls.sh init        # once per site: site CA + first server cert, reloads the gateway
+scripts/gateway-tls.sh status      # CA/server fingerprints, expiry, SANs, key permissions (warns < 30 days)
+scripts/gateway-tls.sh pair        # pairing QR (terminal + PNG) and the lojo://pair code
+scripts/gateway-tls.sh rotate      # yearly: new server key + cert, same CA; hot reload; phones keep working
+scripts/gateway-tls.sh rotate-ca   # only on CA compromise/expiry: every phone must re-pair
+```
+
+| File | Mode | What |
+|---|---|---|
+| `~/.config/lojo-gateway-tls/ca.key` | 0600 | Site CA private key (never leaves santa; back it up offline) |
+| `~/.config/lojo-gateway-tls/ca.crt`, `site.env` | 0600 | CA certificate; site name, SANs, pairing URLs (public, editable) |
+| `~/.local/state/ranch-field-api/tls/server.key` | 0600 | Gateway TLS key |
+| `~/.local/state/ranch-field-api/tls/fullchain.crt`, `server.crt`, `ca.crt`, `pairing-qr.png` | 0600 | Served chain (leaf + CA), leaf, CA copy, QR |
+
+Directories are 0700. To add an address or host name the phones use, edit `SANS` (and
+`LAN_URL`/`OVERLAY_URL` for the QR) in `site.env`, then run `rotate` and, if the URLs changed,
+`pair` again. `.gitignore` blocks `*.key`, `*.p12`, `*.pfx` and `pairing-qr.png`.
+
+Checks from santa (the CA certificate is public):
+
+```bash
+CA=~/.local/state/ranch-field-api/tls/ca.crt
+curl -s --cacert $CA https://192.168.7.103:8443/v1/network   # "scheme":"https","arrivedVia":"lan"
+curl -s --cacert $CA https://100.96.1.18:8443/v1/network     # overlay address
+curl -s https://192.168.7.103:8443/health                    # must FAIL: not publicly trusted
+curl -s http://192.168.7.103:8801/health                     # legacy HTTP still 200
+```
+
 ## QA guide
 
 Every screen can be reached without touching the phone by using launch environment variables:
@@ -135,7 +184,10 @@ scripts/phone-shot.sh OUT.png [KEY=VALUE ...]    # launches (kills existing) the
 | `LOJO_CONFIRM_GPIO` | pin; opens the GPIO confirmation sheet on `detail` (nothing is sent) |
 | `LOJO_SIMULATE_OFFLINE` | `1` routes both paths to unroutable TEST-NET addresses (real failure path) |
 | `LOJO_APPEARANCE` | `light` / `dark` / `system` |
-| `LOJO_LAN`, `LOJO_OVERLAY` | override the site Wi‑Fi / overlay gateway address for this launch (IP or host name, port defaults to 8801) |
+| `LOJO_LAN`, `LOJO_OVERLAY` | override the site Wi‑Fi / overlay gateway address for this launch (`https://` defaults to port 8443, plain addresses to 8801) |
+| `LOJO_PAIR` | a `lojo://pair?…` code: opens the pairing sheet as if scanned with the Camera app |
+| `LOJO_PAIR_CONFIRM` | debug builds only: `1` taps Pair automatically (with `LOJO_PAIR`) |
+| `LOJO_UNPAIR` | `1` removes the pinned CA at launch and reverts to legacy HTTP addresses |
 | `LOJO_SCROLL` | `diagnostics` scrolls the Connection check to its diagnostics card when it finishes |
 | `LOJO_AUTOTEST` | debug builds only: on `detail`, `capture` or `gpio:<pin>:<0\|1>` runs that action through the same code as the buttons (real hardware!) |
 
@@ -145,23 +197,33 @@ Examples:
 scripts/phone-shot.sh /tmp/home.png   LOJO_DEMO=0 LOJO_SCREEN=home
 scripts/phone-shot.sh /tmp/gate.png   LOJO_DEMO=1 LOJO_SCREEN=detail LOJO_DEVICE=north-gate LOJO_CONFIRM_GPIO=11
 scripts/phone-shot.sh /tmp/off.png    LOJO_DEMO=0 LOJO_SCREEN=check LOJO_SIMULATE_OFFLINE=1
+LOJO_SHOT_WAIT=12 scripts/phone-shot.sh /tmp/pair.png LOJO_DEMO=0 \
+  "LOJO_PAIR=$(scripts/gateway-tls.sh pair | grep -o 'lojo://pair?[^ ]*')" LOJO_PAIR_CONFIRM=1
 ```
 
 ### Connection check and diagnostics
 
 The Connection tab tests both paths at once, each with 5 s step timeouts, and shows a plain
 verdict plus a **Diagnostics** card per path: address and type (RFC 1918 LAN, 100.64/10 overlay,
-host name, `.local`), DNS (resolved addresses and time, or "not needed" for IPs), a raw TCP connect
-(time, interface such as `en0 (Wi‑Fi)` or `utun4 (VPN tunnel)`, local address), the HTTP result
+host name, `.local`), **Scheme** (HTTPS pinned, or HTTP legacy and whether only the VPN encrypts
+it), **Pin** (the site CA fingerprint from the Keychain, or "not paired"), DNS (resolved addresses
+and time, or "not needed" for IPs), a raw TCP connect (time, interface such as `en0 (Wi‑Fi)` or
+`utun4 (VPN tunnel)`, local address), **TLS** (version, "chain verified to site CA", the leaf
+fingerprint the phone saw and its expiry, or the exact failure such as `TLS pin mismatch` or
+`TLS errSecHostNameMismatch (-67602)`), the HTTP(S) result
 with the exact `NSURLError` name and code plus the POSIX error (e.g. `NSURLErrorCannotConnectToHost
 (-1004) · ENETUNREACH (51)`) and what it means, and the gateway's name and how it saw the phone.
 **Copy** puts the whole report on the clipboard for support. No passwords, keys or device
 identifiers are ever shown. Settings and Setup have a per-address **Test** button that uses the
 same probe.
 
-`App/Info.plist` must keep `NSAllowsArbitraryLoads` and must **not** gain `NSAllowsLocalNetworking`:
-with that key present iOS ignores arbitrary loads and blocks plain HTTP to the 100.64/10 overlay
-(`-1022`). `NSExceptionDomains` can't express IP ranges.
+A separate **Encryption** step says whether the path in use is pinned HTTPS, legacy HTTP over
+the VPN, or unencrypted, and a refused certificate gets its own "Secure connection refused"
+verdict with the reason and what to do.
+
+`App/Info.plist` has **no ATS exceptions**. URLSession is HTTPS-only. Legacy HTTP goes through
+`PlainHTTP` (Network.framework, not governed by ATS). Don't re-add `NSAllowsArbitraryLoads` or
+`NSAllowsLocalNetworking` (the latter blocked the 100.64/10 overlay with `-1022`).
 
 ### End-to-end capture and GPIO from the phone
 
@@ -172,15 +234,24 @@ pin 11 (GPIO 17) on the LabWebcam Pi, so only do it when that's safe:
 LOJO_SHOT_WAIT=25 scripts/phone-shot.sh /tmp/cap.png LOJO_DEMO=0 LOJO_SCREEN=detail LOJO_DEVICE=SantaWebcam LOJO_AUTOTEST=capture
 LOJO_SHOT_WAIT=12 scripts/phone-shot.sh /tmp/on.png  LOJO_DEMO=0 LOJO_SCREEN=detail LOJO_DEVICE=LabWebcam LOJO_AUTOTEST=gpio:11:1
 LOJO_SHOT_WAIT=12 scripts/phone-shot.sh /tmp/off.png LOJO_DEMO=0 LOJO_SCREEN=detail LOJO_DEVICE=LabWebcam LOJO_AUTOTEST=gpio:11:0
-curl -s 'http://127.0.0.1:8801/v1/events?limit=4'     # capture.requested/completed, gpio.set with via
+curl -s --cacert ~/.local/state/ranch-field-api/tls/ca.crt 'https://127.0.0.1:8443/v1/events?limit=4'
+#   capture.requested / gpio.set show "via":"lan","scheme":"https" from a paired phone
 ssh -i ~/.ssh/id_ed25519_labpi pi@100.96.1.115 'raspi-gpio get 17'   # level=1 after ON, 0 after OFF
+```
+
+The overlay path over HTTPS can be exercised from any overlay peer, e.g. the vision Pi, by
+sending it the public CA certificate on stdin:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_labpi pi@100.96.1.115 'cat > /tmp/ca.crt; curl -s --cacert /tmp/ca.crt https://100.96.1.18:8443/v1/network; rm /tmp/ca.crt' \
+  < ~/.local/state/ranch-field-api/tls/ca.crt      # "arrivedVia":"overlay","scheme":"https"
 ```
 
 Device agents number GPIO by **40-pin header position** (rpi-gpio's default), so the app shows
 "Header pin 11 · GPIO 17" and the gateway rejects non-GPIO header positions.
 
-Gateway checks from santa: `curl -s http://192.168.7.103:8801/v1/network` (LAN) and
-`curl -s http://100.96.1.18:8801/v1/network` (overlay). Both should say `"hub":{"connected":true`.
+Gateway checks from santa: see "Gateway HTTPS" above; every `/v1/network` should say
+`"hub":{"connected":true`.
 
 What to verify by hand on the phone (the host can't tap):
 
@@ -192,6 +263,14 @@ What to verify by hand on the phone (the host can't tap):
 - Settings → Demo network toggles cleanly between demo and live.
 - Settings → Connection setup: both paths test automatically; with no VPN connected the overlay
   row is amber ("expected until you connect your LOJO VPN"), not red.
+- **HTTPS over the VPN:** turn Wi‑Fi off, connect the LOJO VPN profile, open the app. Home should
+  say **Connected · Private overlay** with **Encrypted · pinned**. Connection tab → Diagnostics →
+  "Private overlay (VPN) · HTTPS" shows `TLS 1.3 · chain verified to site CA`. Then do one Capture
+  and one GPIO on/off. The gateway events show `"via":"overlay","scheme":"https"`. If it shows
+  amber **Legacy HTTP over VPN** instead, HTTPS :8443 isn't reachable through the tunnel (the
+  Encryption step and diagnostics give the exact code).
+- **Pairing from the Camera app:** Settings → Security → Forget pairing, then scan the QR code
+  from `scripts/gateway-tls.sh pair` with the Camera app, tap the banner, tap Pair.
 
 ## Screenshots
 
@@ -201,16 +280,19 @@ drawn site plan; the live map is deliberately not captured because live position
 | File | Screen |
 |---|---|
 | `01-onboarding.png` | Welcome, page 1 |
-| `02-setup.png` | Connect your network: site Wi‑Fi answering, overlay expected-off without VPN |
-| `03-home-live.png` / `04-home-demo.png` / `05-home-demo-light.png` | Network home, live and demo, dark and light |
-| `06-detail-demo.png` / `08-detail-live.png` | Device detail (camera still, controls, facts) |
+| `02-setup.png` | Connect your network: paired, site Wi‑Fi answering over HTTPS, overlay expected-off without VPN |
+| `03-home-live.png` / `04-home-demo.png` / `05-home-demo-light.png` | Network home with the **Encrypted · pinned** label, live and demo, dark and light |
+| `06-detail-demo.png` / `08-detail-live.png` | Device detail (camera still, controls, facts incl. Encryption) |
 | `07-gpio-confirm.png` | GPIO confirmation sheet |
 | `09-activity-live.png` / `10-activity-demo.png` | Activity timeline (live shows the end-to-end capture and GPIO test) |
 | `11-map-demo.png` | Map (demo site plan) |
-| `12-check-demo.png` | Connection check, away from site on the overlay |
-| `13-check-live.png` / `14-check-live-diagnostics.png` | Connection check on site Wi‑Fi, verdict and diagnostics |
-| `15-settings.png` | Settings with gateway addresses and Test buttons |
-| `16-offline.png` | Not connected: plain reason plus exact per-path codes |
+| `12-check-demo.png` | Connection check, away from site on the overlay (HTTPS, pinned) |
+| `13-check-live.png` / `14-check-live-diagnostics.png` | Connection check on site Wi‑Fi: verdict, Encryption step, diagnostics with Scheme / Pin / TLS |
+| `15-settings.png` | Settings › Security: pinned, fingerprint, legacy-over-VPN toggle, forget |
+| `16-offline.png` | Not connected: plain reason plus exact per-endpoint codes |
+| `17-pairing.png` | Pairing sheet after scanning the QR code (addresses, CA fingerprint, Pair) |
+| `18-tls-refused.png` / `19-tls-refused-diagnostics.png` | A different CA answering: "Secure connection refused", `TLS pin mismatch` with the presented root |
+| `20-home-unpaired.png` | Not paired: **Unencrypted (legacy HTTP)** label |
 
 ## Hard rules (from `~/CURSOR_ONBOARDING.md`)
 

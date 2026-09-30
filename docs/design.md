@@ -17,7 +17,7 @@ overlay/cloud suppliers. Vocabulary used in the UI:
 | UI term | Meaning (internal) |
 |---|---|
 | Private network | The customer's overlay + sites |
-| Site gateway | santacomputa sidecar (`ranch-field-api`, HTTP :8801) |
+| Site gateway | santacomputa sidecar (`ranch-field-api`, HTTPS :8443 pinned to a per-site CA, legacy HTTP :8801; see [`tls.md`](tls.md)) |
 | Cloud hub | Cloud Run Pub-Node (`pub-node-test`) reached by the gateway over the overlay |
 | Site Wi‑Fi (LAN) | Phone reaches the gateway at `192.168.7.103:8801` |
 | Private overlay (VPN) | Phone reaches the gateway at `100.96.1.18:8801` via its VPN profile |
