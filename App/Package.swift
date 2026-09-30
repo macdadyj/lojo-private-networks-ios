@@ -14,9 +14,32 @@ let package = Package(
             targets: ["LojoNetworks"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.103.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssh.git", exact: "0.15.0"),
+        .package(url: "https://github.com/apple/swift-nio-transport-services.git", from: "1.28.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.5.0"),
+        // Pinned SwiftTerm checkout with our manifest, created by scripts/sync-app.sh.
+        .package(path: "Vendor/SwiftTerm"),
+    ],
     targets: [
         .target(
-            name: "LojoNetworks"
+            name: "LojoSSH",
+            dependencies: [
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "NIOTransportServices", package: "swift-nio-transport-services"),
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
+        ),
+        .target(
+            name: "LojoNetworks",
+            dependencies: [
+                "LojoSSH",
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+            ]
         ),
     ]
 )
