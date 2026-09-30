@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>LOJO Networks</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LOJO Networks talks to your site gateway on the local network to show your devices, camera stills and controls. Nothing is sent to the public internet.</string>
+	<!--
+	No NSAppTransportSecurity exceptions: URLSession only speaks HTTPS (pinned to the site CA,
+	see docs/tls.md). The labelled legacy-HTTP fallback runs on Network.framework (PlainHTTP.swift),
+	which ATS does not govern.
+	-->
+	<!--
+	Offer the paired "Legacy HTTP over VPN" fallback. This is the dev value; scripts/deploy-phone.sh
+	sets it false in the build copy for release builds (see README "Dev and release builds").
+	-->
+	<key>LOJOLegacyHTTPOverVPN</key>
+	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.lojo.PrivateNetworks.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lojo</string>
+			</array>
+		</dict>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

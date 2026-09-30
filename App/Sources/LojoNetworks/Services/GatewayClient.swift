@@ -1,0 +1,332 @@
+import Foundation
+
+/// A URL-loading failure with the exact system code, so the UI can say precisely what went wrong.
+struct TransportFailure: Sendable, Hashable {
+    let code: Int
+    let posix: Int32?
+    let pathNote: String?
+
+    var urlCode: URLError.Code { URLError.Code(rawValue: code) }
+
+    var isATSBlock: Bool { urlCode == .appTransportSecurityRequiresSecureConnection }
+
+    /// e.g. "NSURLErrorTimedOut (-1001)"
+    var codeName: String {
+        let name: String
+        switch urlCode {
+        case .timedOut: name = "NSURLErrorTimedOut"
+        case .cannotConnectToHost: name = "NSURLErrorCannotConnectToHost"
+        case .cannotFindHost: name = "NSURLErrorCannotFindHost"
+        case .dnsLookupFailed: name = "NSURLErrorDNSLookupFailed"
+        case .notConnectedToInternet: name = "NSURLErrorNotConnectedToInternet"
+        case .networkConnectionLost: name = "NSURLErrorNetworkConnectionLost"
+        case .appTransportSecurityRequiresSecureConnection: name = "NSURLErrorAppTransportSecurityRequiresSecureConnection"
+        case .secureConnectionFailed: name = "NSURLErrorSecureConnectionFailed"
+        case .serverCertificateUntrusted: name = "NSURLErrorServerCertificateUntrusted"
+        case .badServerResponse: name = "NSURLErrorBadServerResponse"
+        case .dataNotAllowed: name = "NSURLErrorDataNotAllowed"
+        case .internationalRoamingOff: name = "NSURLErrorInternationalRoamingOff"
+        case .badURL: name = "NSURLErrorBadURL"
+        case .unsupportedURL: name = "NSURLErrorUnsupportedURL"
+        case .cancelled: name = "NSURLErrorCancelled"
+        default: name = "NSURLError"
+        }
+        return "\(name) (\(code))"
+    }
+
+    var meaning: String {
+        switch posix {
+        case 50, 51: return "This phone has no route to that address. Off site, the LOJO VPN must be connected and include the overlay range."
+        case 65, 64: return "The address is routed, but the host isn't answering on this path (it may be off, or the route stops short of it)."
+        case 61: return "The host answered but nothing is listening on that port. The gateway service may be stopped, or the port is wrong."
+        default: break
+        }
+        switch urlCode {
+        case .timedOut: return "No answer before the timeout. The address isn't reachable on the path this phone is using."
+        case .cannotConnectToHost: return "The connection to that address and port couldn't be opened (refused or no route)."
+        case .cannotFindHost, .dnsLookupFailed: return "The gateway name couldn't be resolved. Private names only resolve with the LOJO VPN on."
+        case .notConnectedToInternet: return "iOS says there's no usable network path to that address."
+        case .networkConnectionLost: return "The connection dropped mid-request, often while switching Wi‑Fi or VPN."
+        case .appTransportSecurityRequiresSecureConnection: return "iOS App Transport Security blocked plain HTTP to this address before any packet was sent."
+        case .secureConnectionFailed, .serverCertificateUntrusted: return "A secure (HTTPS) connection couldn't be set up."
+        case .badServerResponse: return "Something answered, but not like a LOJO gateway."
+        case .dataNotAllowed, .internationalRoamingOff: return "Cellular data is off or restricted for this app."
+        case .badURL, .unsupportedURL: return "The gateway address isn't a valid http:// address."
+        default: return "The request failed."
+        }
+    }
+
+    var posixText: String? {
+        guard let posix else { return nil }
+        let name: String
+        switch posix {
+        case 50: name = "ENETDOWN"
+        case 51: name = "ENETUNREACH"
+        case 54: name = "ECONNRESET"
+        case 60: name = "ETIMEDOUT"
+        case 61: name = "ECONNREFUSED"
+        case 64: name = "EHOSTDOWN"
+        case 65: name = "EHOSTUNREACH"
+        default: name = "errno"
+        }
+        return "\(name) (\(posix))"
+    }
+
+    init(code: Int, posix: Int32? = nil, pathNote: String? = nil) {
+        self.code = code
+        self.posix = posix
+        self.pathNote = pathNote
+    }
+
+    init(_ error: URLError) {
+        let ns = error as NSError
+        var posix: Int32?
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+            let domain = underlying.userInfo["_kCFStreamErrorDomainKey"] as? Int
+            let streamCode = underlying.userInfo["_kCFStreamErrorCodeKey"] as? Int
+            if domain == 1, let streamCode { posix = Int32(streamCode) }
+            else if underlying.domain == NSPOSIXErrorDomain { posix = Int32(underlying.code) }
+        }
+        let path = ns.userInfo["_NSURLErrorNWPathKey"].map { String(describing: $0) }
+        self.init(code: error.errorCode, posix: posix, pathNote: path)
+    }
+}
+
+enum GatewayError: LocalizedError, Sendable {
+    case http(status: Int, message: String?)
+    case badResponse
+    case transport(TransportFailure)
+    case localNetworkDenied
+    case tls(TLSFailure)
+
+    var tlsFailure: TLSFailure? {
+        if case .tls(let f) = self { return f }
+        return nil
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .http(let status, let message):
+            if let message, !message.isEmpty { return Self.friendly(serverMessage: message) }
+            return "The gateway answered with HTTP \(status)."
+        case .badResponse:
+            return "Something answered, but not like a LOJO gateway."
+        case .transport(let failure):
+            return failure.meaning
+        case .localNetworkDenied:
+            return "iOS is blocking this app from the local network (Local Network permission is off)."
+        case .tls(let f):
+            return f.meaning
+        }
+    }
+
+    /// Short technical tag for diagnostics and toasts, e.g. "NSURLErrorTimedOut (-1001)".
+    var technical: String {
+        switch self {
+        case .http(let status, _): return "HTTP \(status)"
+        case .badResponse: return "Unreadable reply"
+        case .transport(let f):
+            if let p = f.posixText { return "\(f.codeName) · \(p)" }
+            return f.codeName
+        case .localNetworkDenied: return "Local network prohibited"
+        case .tls(let f): return f.technical
+        }
+    }
+
+    private static func friendly(serverMessage: String) -> String {
+        switch serverMessage {
+        case "unknown device": return "That device isn't on the network right now."
+        case "webcam disabled on device": return "This device's camera is turned off."
+        case "cloud hub not connected": return "The site gateway has lost the cloud hub. Try again shortly."
+        case "no still": return "No still is available yet."
+        default: return serverMessage.prefix(1).uppercased() + serverMessage.dropFirst()
+        }
+    }
+
+    static func wrap(_ error: Error, url: URL? = nil) -> GatewayError {
+        if let e = error as? GatewayError { return e }
+        if let e = error as? URLError {
+            if url?.scheme == "https", let tls = tlsFailure(e, url: url) { return .tls(tls) }
+            // iOS reports a declined Local Network permission as an unsatisfied path, not a distinct code.
+            let path = String(describing: e.userInfo["_NSURLErrorNWPathKey"] ?? "")
+            if path.localizedCaseInsensitiveContains("local network prohibited") { return .localNetworkDenied }
+            return .transport(TransportFailure(e))
+        }
+        return .badResponse
+    }
+
+    /// The pinning delegate's verdict if it refused the certificate, otherwise the TLS alert
+    /// URLSession reported (e.g. errSSLClosedAbort when the port speaks plain HTTP).
+    private static func tlsFailure(_ e: URLError, url: URL?) -> TLSFailure? {
+        let tlsCodes: Set<Int> = [-999, -1200, -1201, -1202, -1203, -1204, -1205, -1206]
+        guard tlsCodes.contains(e.errorCode) else { return nil }
+        if let recorded = TLSObserver.shared.failure(TLSObserver.key(url)) { return recorded }
+        guard e.errorCode != -999 else { return nil }
+        let infos = [e.userInfo, (e.userInfo[NSUnderlyingErrorKey] as? NSError)?.userInfo ?? [:]]
+        for info in infos {
+            if info["_kCFStreamErrorDomainKey"] as? Int == 3, let code = info["_kCFStreamErrorCodeKey"] as? Int {
+                return TLSFailure(kind: .handshake(code: code))
+            }
+        }
+        return TLSFailure(kind: .handshake(code: e.errorCode))
+    }
+}
+
+struct ProbeResult: Sendable {
+    let endpoint: GatewayEndpoint
+    let network: GatewayNetwork?
+    let latencyMs: Int?
+    let error: GatewayError?
+    var elapsedMs: Int? = nil
+    var tls: TLSSession? = nil
+
+    var reachable: Bool { network != nil }
+}
+
+struct GatewayClient: Sendable {
+    let endpoint: GatewayEndpoint
+    let session: URLSession
+
+    /// HTTPS requests on this session trust only `anchor` (the pinned site CA). Plain-HTTP
+    /// endpoints bypass URLSession entirely (see `PlainHTTP`).
+    static func makeSession(timeout: TimeInterval, anchor: SiteCA?, pairingSHA256: String? = nil) -> URLSession {
+        makeSession(timeout: timeout, delegate: PinningDelegate(anchor: anchor, pairingSHA256: pairingSHA256))
+    }
+
+    static func makeSession(timeout: TimeInterval, delegate: PinningDelegate) -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout * 2
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.tlsMinimumSupportedProtocolVersion = .TLSv12
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+    }
+
+    private struct DevicesEnvelope: Decodable {
+        var ok: Bool
+        var devices: [Device]
+    }
+
+    private struct EventsEnvelope: Decodable {
+        var ok: Bool
+        var events: [NetworkEvent]
+    }
+
+    private struct ActionReply: Decodable {
+        var ok: Bool
+        var error: String?
+    }
+
+    func network() async throws -> GatewayNetwork {
+        try await get("v1/network")
+    }
+
+    func devices() async throws -> [Device] {
+        let env: DevicesEnvelope = try await get("v1/devices")
+        return env.devices
+    }
+
+    func events(limit: Int = 150) async throws -> [NetworkEvent] {
+        let env: EventsEnvelope = try await get("v1/events?limit=\(limit)")
+        return env.events
+    }
+
+    func still(path: String) async throws -> Data {
+        guard let url = URL(string: path, relativeTo: endpoint.baseURL) else { throw GatewayError.badResponse }
+        let (data, response) = try await send(URLRequest(url: url))
+        guard response.statusCode == 200, !data.isEmpty else {
+            throw GatewayError.http(status: response.statusCode, message: nil)
+        }
+        return data
+    }
+
+    func requestCapture(socketID: String) async throws {
+        try await post("devices/\(escape(socketID))/capture", body: nil)
+    }
+
+    func setOutput(socketID: String, pin: String, value: Int) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["pin": pin, "value": value])
+        try await post("devices/\(escape(socketID))/gpio", body: body)
+    }
+
+    static func probe(_ endpoint: GatewayEndpoint, anchor: SiteCA?, timeout: TimeInterval = 5) async -> ProbeResult {
+        let session = makeSession(timeout: timeout, anchor: anchor)
+        defer { session.finishTasksAndInvalidate() }
+        let client = GatewayClient(endpoint: endpoint, session: session)
+        let start = Date()
+        let tls = { endpoint.secure ? TLSObserver.shared.session(TLSObserver.key(endpoint.baseURL)) : nil }
+        do {
+            let net = try await client.network()
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            return ProbeResult(endpoint: endpoint, network: net, latencyMs: ms, error: nil, elapsedMs: ms, tls: tls())
+        } catch {
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            return ProbeResult(endpoint: endpoint, network: nil, latencyMs: nil,
+                               error: GatewayError.wrap(error, url: endpoint.baseURL), elapsedMs: ms)
+        }
+    }
+
+    /// Connects with only the pairing code's CA fingerprint to go on and, if the gateway's chain
+    /// contains that exact CA and verifies against it, returns the CA certificate to pin.
+    static func pair(_ endpoint: GatewayEndpoint, caSHA256: String, timeout: TimeInterval = 6) async -> Result<(SiteCA, GatewayNetwork), GatewayError> {
+        let delegate = PinningDelegate(anchor: nil, pairingSHA256: caSHA256)
+        let session = makeSession(timeout: timeout, delegate: delegate)
+        defer { session.finishTasksAndInvalidate() }
+        do {
+            let net = try await GatewayClient(endpoint: endpoint, session: session).network()
+            guard let ca = delegate.capturedCA else { return .failure(.tls(TLSFailure(kind: .pairingMismatch(presented: nil)))) }
+            return .success((ca, net))
+        } catch {
+            return .failure(GatewayError.wrap(error, url: endpoint.baseURL))
+        }
+    }
+
+    // MARK: - plumbing
+
+    private func escape(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? s
+    }
+
+    private func get<T: Decodable>(_ path: String) async throws -> T {
+        guard let url = URL(string: path, relativeTo: endpoint.baseURL) else { throw GatewayError.badResponse }
+        let (data, response) = try await send(URLRequest(url: url))
+        guard response.statusCode == 200 else {
+            let reply = try? JSONDecoder().decode(ActionReply.self, from: data)
+            throw GatewayError.http(status: response.statusCode, message: reply?.error)
+        }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw GatewayError.badResponse
+        }
+    }
+
+    private func post(_ path: String, body: Data?) async throws {
+        guard let url = URL(string: path, relativeTo: endpoint.baseURL) else { throw GatewayError.badResponse }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        if let body {
+            req.httpBody = body
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await send(req)
+        let reply = try? JSONDecoder().decode(ActionReply.self, from: data)
+        guard response.statusCode == 200, reply?.ok == true else {
+            throw GatewayError.http(status: response.statusCode, message: reply?.error)
+        }
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        do {
+            if request.url?.scheme == "http" {
+                return try await PlainHTTP.send(request, timeout: session.configuration.timeoutIntervalForRequest)
+            }
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw GatewayError.badResponse }
+            return (data, http)
+        } catch {
+            throw GatewayError.wrap(error, url: request.url)
+        }
+    }
+}

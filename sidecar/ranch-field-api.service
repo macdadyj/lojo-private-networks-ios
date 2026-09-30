@@ -1,0 +1,18 @@
+[Unit]
+Description=RanchField API (Pub-Node stills + GPIO, not Flex)
+After=network-online.target pubnode-connexa-proxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/ranch-field-api
+Environment=PUBNODE_URL=http://100.96.1.18:8788/
+Environment=BIND=0.0.0.0
+Environment=PORT=8801
+Environment=NODE_ENV=production
+ExecStart=/home/jon/.nvm/versions/node/v20.20.1/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
