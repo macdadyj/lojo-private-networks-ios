@@ -289,22 +289,32 @@ struct ConnectionCheckView: View {
     @State private var showDiagnostics = true
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                verdictCard
-                stepsCard
-                Button {
-                    Haptics.light()
-                    Task { await check.run(store: store) }
-                } label: {
-                    Label(check.running ? "Checking…" : "Run check again", systemImage: "arrow.clockwise")
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    verdictCard
+                    stepsCard
+                    Button {
+                        Haptics.light()
+                        Task { await check.run(store: store) }
+                    } label: {
+                        Label(check.running ? "Checking…" : "Run check again", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(check.running)
+                    diagnostics
+                        .id("diagnostics")
+                    explainer
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(check.running)
-                diagnostics
-                explainer
+                .padding(16)
             }
-            .padding(16)
+            .onChange(of: check.finishedAt) {
+                guard store.launch.scroll == "diagnostics" else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    withAnimation { proxy.scrollTo("diagnostics", anchor: .top) }
+                }
+            }
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Connection")

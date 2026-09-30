@@ -15,6 +15,8 @@ struct LaunchOptions: Sendable {
     var appearance: Appearance?
     var lanOverride: String?
     var overlayOverride: String?
+    /// "diagnostics" scrolls the Connection check to its diagnostics card once the check finishes.
+    var scroll: String?
     /// Debug builds only: "capture" or "gpio:<pin>:<0|1>" runs that action on the detail screen.
     var autotest: String?
 
@@ -41,6 +43,7 @@ struct LaunchOptions: Sendable {
             appearance: text("LOJO_APPEARANCE").flatMap { Appearance(rawValue: $0.lowercased()) },
             lanOverride: text("LOJO_LAN"),
             overlayOverride: text("LOJO_OVERLAY"),
+            scroll: text("LOJO_SCROLL")?.lowercased(),
             autotest: autotest
         )
     }()

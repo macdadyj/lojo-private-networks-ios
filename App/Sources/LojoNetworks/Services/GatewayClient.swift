@@ -35,9 +35,15 @@ struct TransportFailure: Sendable, Hashable {
     }
 
     var meaning: String {
+        switch posix {
+        case 50, 51: return "This phone has no route to that address. Off site, the LOJO VPN must be connected and include the overlay range."
+        case 65, 64: return "The address is routed, but the host isn't answering on this path (it may be off, or the route stops short of it)."
+        case 61: return "The host answered but nothing is listening on that port. The gateway service may be stopped, or the port is wrong."
+        default: break
+        }
         switch urlCode {
         case .timedOut: return "No answer before the timeout. The address isn't reachable on the path this phone is using."
-        case .cannotConnectToHost: return "The address was reached but nothing accepted the connection on that port (refused or no route)."
+        case .cannotConnectToHost: return "The connection to that address and port couldn't be opened (refused or no route)."
         case .cannotFindHost, .dnsLookupFailed: return "The gateway name couldn't be resolved. Private names only resolve with the LOJO VPN on."
         case .notConnectedToInternet: return "iOS says there's no usable network path to that address."
         case .networkConnectionLost: return "The connection dropped mid-request, often while switching Wi‑Fi or VPN."
