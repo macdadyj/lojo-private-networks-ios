@@ -12,6 +12,9 @@
 #   CA key      ~/.config/lojo-gateway-tls/ca.key                 (0600, dir 0700)
 #   server key  ~/.local/state/ranch-field-api/tls/server.key     (0600, dir 0700)
 # Site settings (public, editable): ~/.config/lojo-gateway-tls/site.env
+# Renaming a site: edit SITE_NAME there, then `rotate` (new leaf + name, same CA, no re-pair)
+# and `pair` (new QR). The CA subject keeps the name it was created with; phones pin the CA
+# by fingerprint and take the displayed name from the gateway, so that's harmless.
 set -euo pipefail
 umask 077
 
@@ -29,7 +32,8 @@ SITE_ENV="$CA_DIR/site.env"
 if [[ ! -f "$SITE_ENV" ]]; then
   cat >"$SITE_ENV" <<'EOF'
 # Public site settings for scripts/gateway-tls.sh (no secrets here).
-SITE_NAME="My Private Network"
+# These defaults are the santacomputa site's. For another site, edit every line before `init`.
+SITE_NAME="LOJO VPN"
 # Every address or name a phone may use to reach this gateway must be listed.
 SANS="IP:192.168.7.103,IP:100.96.1.18,IP:127.0.0.1,DNS:santacomputa,DNS:santacomputa.local,DNS:localhost"
 LAN_URL="https://192.168.7.103:8443"
@@ -87,6 +91,15 @@ EOF
   mv "$work/server.crt" "$TLS_DIR/server.crt"
   mv "$work/ca.crt" "$TLS_DIR/ca.crt"
   rm -rf "$work"
+  write_site
+}
+
+# The name the gateway reports in /v1/network (public; served over pinned HTTPS).
+write_site() {
+  SITE_NAME="$SITE_NAME" python3 -c 'import json,os; print(json.dumps({"name": os.environ["SITE_NAME"]}))' \
+    >"$TLS_DIR/site.json.new"
+  chmod 600 "$TLS_DIR/site.json.new"
+  mv "$TLS_DIR/site.json.new" "$TLS_DIR/site.json"
 }
 
 reload_gateway() {
@@ -103,7 +116,7 @@ reload_gateway() {
 
 status() {
   [[ -f "$TLS_DIR/server.crt" ]] || { echo "no server certificate yet; run: $0 init"; exit 1; }
-  echo "Site:            ${SITE_NAME}"
+  echo "Site:            ${SITE_NAME} (gateway serves: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$TLS_DIR/site.json" 2>/dev/null || echo "none; run rotate"))"
   echo "Site CA SHA-256: $(fp "$CA_DIR/ca.crt")"
   echo "CA expires:      $(openssl x509 -in "$CA_DIR/ca.crt" -noout -enddate | cut -d= -f2)"
   echo "Server SHA-256:  $(fp "$TLS_DIR/server.crt")"

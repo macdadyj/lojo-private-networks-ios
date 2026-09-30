@@ -20,7 +20,7 @@ const OVERLAY_PREFIXES = (process.env.OVERLAY_PREFIXES || "100.").split(",");
 const MAX_EVENTS = 300;
 const TLS_PORT = Number(process.env.TLS_PORT || 8443);
 const TLS_DIR = process.env.TLS_DIR || path.join(STATE_DIR, "tls");
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const RELIST_MS = 60 * 1000;
 const HEADER_GPIO_PINS = new Set([3, 5, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 21, 22, 23, 24, 26, 27, 28, 29, 31, 32, 33, 35, 36, 37, 38, 40]);
 const startedAt = new Date().toISOString();
@@ -403,6 +403,19 @@ function loadTLS() {
   }
 }
 
+// Public site settings written by scripts/gateway-tls.sh (from site.env); reloaded on SIGHUP.
+let site = { name: null };
+
+function loadSite() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(TLS_DIR, "site.json"), "utf8"));
+    site = { name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : null };
+  } catch (e) {
+    if (e.code !== "ENOENT") console.log("site.json unreadable:", e.code || e.message);
+    site = { name: null };
+  }
+}
+
 function tlsInfo() {
   if (!tls) return { enabled: false };
   return {
@@ -480,6 +493,7 @@ app.get("/v1/network", (req, res) => {
     ok: true,
     version: VERSION,
     gateway: { name: os.hostname(), startedAt: startedAt, uptimeSec: Math.round(process.uptime()) },
+    site: site,
     hub: {
       connected: !!socket.connected,
       since: hub.since,
@@ -614,11 +628,13 @@ function startTLS() {
   });
 }
 
+loadSite();
 if (loadTLS()) startTLS();
 else console.log("https disabled: no certificate in", TLS_DIR, "(run scripts/gateway-tls.sh init)");
 
 // scripts/gateway-tls.sh rotate sends SIGHUP: swap certificates without dropping HTTP clients.
 process.on("SIGHUP", () => {
+  loadSite();
   if (!loadTLS()) return console.log("SIGHUP: no certificate; https unchanged");
   if (tlsServer) {
     tlsServer.setSecureContext({ key: tls.key, cert: tls.cert });

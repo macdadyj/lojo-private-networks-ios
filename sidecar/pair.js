@@ -9,8 +9,8 @@ const fs = require("fs");
 const QRCode = require("qrcode");
 
 const [caPath, pngPath] = process.argv.slice(2);
-if (!caPath || !pngPath) {
-  console.error("usage: node pair.js <ca.crt> <out.png>");
+if (!caPath || !pngPath || !process.env.SITE_NAME) {
+  console.error("usage: SITE_NAME=... LAN_URL=... OVERLAY_URL=... node pair.js <ca.crt> <out.png>");
   process.exit(2);
 }
 
@@ -19,7 +19,7 @@ const fingerprint = crypto.createHash("sha256").update(der).digest("hex");
 
 const params = new URLSearchParams({
   v: "1",
-  n: process.env.SITE_NAME || "My Private Network",
+  n: process.env.SITE_NAME,
   lan: process.env.LAN_URL || "",
   ov: process.env.OVERLAY_URL || "",
   ca: fingerprint,
