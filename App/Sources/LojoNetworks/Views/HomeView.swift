@@ -282,7 +282,7 @@ struct DeviceRow: View {
                     if device.location != nil { Chip(text: "Map", systemImage: "mappin") }
                 }
             }
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             StatusDot(style: device.online ? .online : .offline)
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
