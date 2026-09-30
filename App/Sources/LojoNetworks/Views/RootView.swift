@@ -53,7 +53,7 @@ struct RootView: View {
         .onAppear(perform: applyLaunchOptions)
         .task(id: scenePhase) {
             guard scenePhase == .active, onboarded else { return }
-            await store.refresh(.launch)
+            await store.refresh(.pathChange)
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 if Task.isCancelled { break }
@@ -116,7 +116,7 @@ struct RootView: View {
         case .activity: router.tab = .activity
         case .map: router.tab = .map
         case .check: router.tab = .check
-        case .settings:
+        case .settings, .setup:
             router.tab = .network
             router.showSettings = true
         case .detail:

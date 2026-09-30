@@ -16,7 +16,7 @@ const STATE_DIR =
 const LAN_PREFIXES = (process.env.LAN_PREFIXES || "192.168.").split(",");
 const OVERLAY_PREFIXES = (process.env.OVERLAY_PREFIXES || "100.").split(",");
 const MAX_EVENTS = 300;
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const startedAt = new Date().toISOString();
 
 const devices = new Map(); // socketID -> sanitized public record
@@ -336,10 +336,17 @@ socket.on("remove webpage object", (socketID) => {
 
 // ---------- http ----------
 
+function peerAddress(req) {
+  return String((req.socket && req.socket.remoteAddress) || "").replace(/^::ffff:/, "");
+}
+
+// A phone on the VPN that targets the LAN address still arrives from its overlay address, so the
+// peer decides "overlay" first; the local address only breaks ties for direct LAN clients.
 function arrivalPath(req) {
   const local = String((req.socket && req.socket.localAddress) || "").replace(/^::ffff:/, "");
+  const peer = peerAddress(req);
   if (local === "127.0.0.1" || local === "::1") return "local";
-  if (OVERLAY_PREFIXES.some((p) => local.startsWith(p))) return "overlay";
+  if (OVERLAY_PREFIXES.some((p) => peer.startsWith(p) || local.startsWith(p))) return "overlay";
   if (LAN_PREFIXES.some((p) => local.startsWith(p))) return "lan";
   return "other";
 }
@@ -418,6 +425,7 @@ app.get("/v1/network", (req, res) => {
     },
     devices: { online: online, offline: offline, total: online + offline },
     arrivedVia: arrivalPath(req),
+    seenFrom: peerAddress(req),
     serverTime: new Date().toISOString(),
   });
 });

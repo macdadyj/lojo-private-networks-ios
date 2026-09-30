@@ -57,6 +57,7 @@ struct GatewayNetwork: Codable, Sendable, Hashable {
     var hub: Hub
     var devices: Counts
     var arrivedVia: String?
+    var seenFrom: String?
     var serverTime: String?
 }
 

@@ -54,6 +54,9 @@ struct DeviceDetailView: View {
                     FullStillView(device: device)
                 }
                 .onAppear { openPendingConfirmation(device) }
+                #if DEBUG
+                .task { await runAutotest() }
+                #endif
             } else {
                 ContentUnavailableView(
                     "Device not found",
@@ -70,6 +73,31 @@ struct DeviceDetailView: View {
         guard let pin = device.gpio.first(where: { $0.pin == pinID }) ?? device.gpio.first else { return }
         pending = PendingOutput(device: device, pin: pin, turnOn: !pin.isOn)
     }
+
+    #if DEBUG
+    /// Developer-launch hook (LOJO_AUTOTEST) that drives capture or GPIO through the same store
+    /// calls the buttons use, so end-to-end tests exercise the real phone → gateway → hub path.
+    private func runAutotest() async {
+        guard let spec = store.launch.autotest, !store.autotestStarted else { return }
+        store.autotestStarted = true
+        let deadline = Date().addingTimeInterval(25)
+        while Date() < deadline {
+            if let d = store.device(key: deviceKey), store.actionBlocker(for: d) == nil { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard let device = store.device(key: deviceKey) else { return }
+        let parts = spec.split(separator: ":").map(String.init)
+        switch parts.first {
+        case "capture":
+            await store.capture(device)
+        case "gpio" where parts.count == 3:
+            guard let pin = device.gpio.first(where: { $0.pin == parts[1] }) else { return }
+            await store.setOutput(device, pin: pin, on: parts[2] == "1")
+        default:
+            break
+        }
+    }
+    #endif
 
     // MARK: - header
 

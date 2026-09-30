@@ -1,35 +1,120 @@
 import Foundation
 
+/// A URL-loading failure with the exact system code, so the UI can say precisely what went wrong.
+struct TransportFailure: Sendable, Hashable {
+    let code: Int
+    let posix: Int32?
+    let pathNote: String?
+
+    var urlCode: URLError.Code { URLError.Code(rawValue: code) }
+
+    var isATSBlock: Bool { urlCode == .appTransportSecurityRequiresSecureConnection }
+
+    /// e.g. "NSURLErrorTimedOut (-1001)"
+    var codeName: String {
+        let name: String
+        switch urlCode {
+        case .timedOut: name = "NSURLErrorTimedOut"
+        case .cannotConnectToHost: name = "NSURLErrorCannotConnectToHost"
+        case .cannotFindHost: name = "NSURLErrorCannotFindHost"
+        case .dnsLookupFailed: name = "NSURLErrorDNSLookupFailed"
+        case .notConnectedToInternet: name = "NSURLErrorNotConnectedToInternet"
+        case .networkConnectionLost: name = "NSURLErrorNetworkConnectionLost"
+        case .appTransportSecurityRequiresSecureConnection: name = "NSURLErrorAppTransportSecurityRequiresSecureConnection"
+        case .secureConnectionFailed: name = "NSURLErrorSecureConnectionFailed"
+        case .serverCertificateUntrusted: name = "NSURLErrorServerCertificateUntrusted"
+        case .badServerResponse: name = "NSURLErrorBadServerResponse"
+        case .dataNotAllowed: name = "NSURLErrorDataNotAllowed"
+        case .internationalRoamingOff: name = "NSURLErrorInternationalRoamingOff"
+        case .badURL: name = "NSURLErrorBadURL"
+        case .unsupportedURL: name = "NSURLErrorUnsupportedURL"
+        case .cancelled: name = "NSURLErrorCancelled"
+        default: name = "NSURLError"
+        }
+        return "\(name) (\(code))"
+    }
+
+    var meaning: String {
+        switch urlCode {
+        case .timedOut: return "No answer before the timeout. The address isn't reachable on the path this phone is using."
+        case .cannotConnectToHost: return "The address was reached but nothing accepted the connection on that port (refused or no route)."
+        case .cannotFindHost, .dnsLookupFailed: return "The gateway name couldn't be resolved. Private names only resolve with the LOJO VPN on."
+        case .notConnectedToInternet: return "iOS says there's no usable network path to that address."
+        case .networkConnectionLost: return "The connection dropped mid-request, often while switching Wi‑Fi or VPN."
+        case .appTransportSecurityRequiresSecureConnection: return "iOS App Transport Security blocked plain HTTP to this address before any packet was sent."
+        case .secureConnectionFailed, .serverCertificateUntrusted: return "A secure (HTTPS) connection couldn't be set up."
+        case .badServerResponse: return "Something answered, but not like a LOJO gateway."
+        case .dataNotAllowed, .internationalRoamingOff: return "Cellular data is off or restricted for this app."
+        case .badURL, .unsupportedURL: return "The gateway address isn't a valid http:// address."
+        default: return "The request failed."
+        }
+    }
+
+    var posixText: String? {
+        guard let posix else { return nil }
+        let name: String
+        switch posix {
+        case 50: name = "ENETDOWN"
+        case 51: name = "ENETUNREACH"
+        case 54: name = "ECONNRESET"
+        case 60: name = "ETIMEDOUT"
+        case 61: name = "ECONNREFUSED"
+        case 64: name = "EHOSTDOWN"
+        case 65: name = "EHOSTUNREACH"
+        default: name = "errno"
+        }
+        return "\(name) (\(posix))"
+    }
+
+    init(code: Int, posix: Int32? = nil, pathNote: String? = nil) {
+        self.code = code
+        self.posix = posix
+        self.pathNote = pathNote
+    }
+
+    init(_ error: URLError) {
+        let ns = error as NSError
+        var posix: Int32?
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+            let domain = underlying.userInfo["_kCFStreamErrorDomainKey"] as? Int
+            let streamCode = underlying.userInfo["_kCFStreamErrorCodeKey"] as? Int
+            if domain == 1, let streamCode { posix = Int32(streamCode) }
+            else if underlying.domain == NSPOSIXErrorDomain { posix = Int32(underlying.code) }
+        }
+        let path = ns.userInfo["_NSURLErrorNWPathKey"].map { String(describing: $0) }
+        self.init(code: error.errorCode, posix: posix, pathNote: path)
+    }
+}
+
 enum GatewayError: LocalizedError, Sendable {
     case http(status: Int, message: String?)
     case badResponse
-    case transport(URLError.Code)
+    case transport(TransportFailure)
     case localNetworkDenied
 
     var errorDescription: String? {
         switch self {
         case .http(let status, let message):
             if let message, !message.isEmpty { return Self.friendly(serverMessage: message) }
-            return "The gateway answered with an error (\(status))."
+            return "The gateway answered with HTTP \(status)."
         case .badResponse:
-            return "The gateway sent a reply the app couldn't read."
-        case .transport(let code):
-            return Self.describe(code)
+            return "Something answered, but not like a LOJO gateway."
+        case .transport(let failure):
+            return failure.meaning
         case .localNetworkDenied:
-            return "iOS is blocking this app from the local network."
+            return "iOS is blocking this app from the local network (Local Network permission is off)."
         }
     }
 
-    static func describe(_ code: URLError.Code) -> String {
-        switch code {
-        case .timedOut: return "No answer — the request timed out."
-        case .cannotConnectToHost: return "The gateway address answered but refused the connection."
-        case .cannotFindHost, .dnsLookupFailed: return "The gateway address couldn't be found."
-        case .notConnectedToInternet: return "This phone has no network connection."
-        case .networkConnectionLost: return "The connection dropped mid-request."
-        case .internationalRoamingOff, .dataNotAllowed: return "Cellular data isn't available."
-        case .secureConnectionFailed: return "A secure connection couldn't be set up."
-        default: return "The network request failed."
+    /// Short technical tag for diagnostics and toasts, e.g. "NSURLErrorTimedOut (-1001)".
+    var technical: String {
+        switch self {
+        case .http(let status, _): return "HTTP \(status)"
+        case .badResponse: return "Unreadable reply"
+        case .transport(let f):
+            if let p = f.posixText { return "\(f.codeName) · \(p)" }
+            return f.codeName
+        case .localNetworkDenied: return "Local network prohibited"
         }
     }
 
@@ -49,7 +134,7 @@ enum GatewayError: LocalizedError, Sendable {
             // iOS reports a declined Local Network permission as an unsatisfied path, not a distinct code.
             let path = String(describing: e.userInfo["_NSURLErrorNWPathKey"] ?? "")
             if path.localizedCaseInsensitiveContains("local network prohibited") { return .localNetworkDenied }
-            return .transport(e.code)
+            return .transport(TransportFailure(e))
         }
         return .badResponse
     }
@@ -60,6 +145,7 @@ struct ProbeResult: Sendable {
     let network: GatewayNetwork?
     let latencyMs: Int?
     let error: GatewayError?
+    var elapsedMs: Int? = nil
 
     var reachable: Bool { network != nil }
 }
@@ -124,15 +210,16 @@ struct GatewayClient: Sendable {
         try await post("devices/\(escape(socketID))/gpio", body: body)
     }
 
-    static func probe(_ endpoint: GatewayEndpoint, timeout: TimeInterval = 3) async -> ProbeResult {
+    static func probe(_ endpoint: GatewayEndpoint, timeout: TimeInterval = 5) async -> ProbeResult {
         let client = GatewayClient(endpoint: endpoint, session: makeSession(timeout: timeout))
         let start = Date()
         do {
             let net = try await client.network()
             let ms = Int(Date().timeIntervalSince(start) * 1000)
-            return ProbeResult(endpoint: endpoint, network: net, latencyMs: ms, error: nil)
+            return ProbeResult(endpoint: endpoint, network: net, latencyMs: ms, error: nil, elapsedMs: ms)
         } catch {
-            return ProbeResult(endpoint: endpoint, network: nil, latencyMs: nil, error: GatewayError.wrap(error))
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            return ProbeResult(endpoint: endpoint, network: nil, latencyMs: nil, error: GatewayError.wrap(error), elapsedMs: ms)
         }
     }
 

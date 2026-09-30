@@ -60,7 +60,8 @@ scripts/deploy-phone.sh           # compile + provision + sign + USB install + l
 
 `deploy-phone.sh` rsyncs `App/` into the **ext4** build dir `~/.local/share/ios-dev/apps/LojoNetworks`
 (it refuses non-ext4). It exports `XTL_TMPDIR=~/.cache/xtool-tmp` through the env file, runs
-`xtool dev run --usb --udid 00008030-001A4D340A93402E`, then launches the app with
+`xtool dev run --usb --udid <UDID>` (the UDID is read from USB at run time, or from
+`LOJO_UDID`, and is never stored in the repo), then launches the app with
 `pymobiledevice3 developer core-device launch-application --userspace`. Always edit in the repo;
 the build dir is disposable. Signing on NTFS (`LOJODESKDRIVE`) fails with `0xe8008017`.
 

@@ -46,12 +46,14 @@ final class NetworkStore: ObservableObject {
     @Published private(set) var events: [NetworkEvent] = []
     @Published private(set) var lastSuccess: Date?
     @Published private(set) var lastError: GatewayError?
+    @Published private(set) var lastProbes: [ProbeResult] = []
     @Published private(set) var latencyMs: Int?
     @Published private(set) var isRefreshing = false
     @Published private(set) var captureStage: [String: CaptureStage] = [:]
     @Published private(set) var outputBusy: String?
     @Published private(set) var stills: [String: StillImage] = [:]
     @Published var toast: Toast?
+    var autotestStarted = false
 
     @Published var isDemo: Bool {
         didSet {
@@ -138,12 +140,20 @@ final class NetworkStore: ObservableObject {
     }
 
     func endpoints() -> [GatewayEndpoint] {
-        let lan = launch.simulateOffline ? Self.offlineLAN : lanAddress
-        let overlay = launch.simulateOffline ? Self.offlineOverlay : overlayAddress
+        let lan = launch.simulateOffline ? Self.offlineLAN : (launch.lanOverride ?? lanAddress)
+        let overlay = launch.simulateOffline ? Self.offlineOverlay : (launch.overlayOverride ?? overlayAddress)
         return [
-            URL(string: lan).map { GatewayEndpoint(path: .lan, baseURL: $0) },
-            URL(string: overlay).map { GatewayEndpoint(path: .overlay, baseURL: $0) },
+            GatewayAddress.normalize(lan).map { GatewayEndpoint(path: .lan, baseURL: $0) },
+            GatewayAddress.normalize(overlay).map { GatewayEndpoint(path: .overlay, baseURL: $0) },
         ].compactMap { $0 }
+    }
+
+    /// One line per path explaining the last failure, e.g. "Private overlay: NSURLErrorTimedOut (-1001)".
+    var failureSummary: String? {
+        guard link == .unreachable, !lastProbes.isEmpty else { return nil }
+        return lastProbes.compactMap { p in
+            p.error.map { "\(p.endpoint.path.title): \($0.technical)" }
+        }.joined(separator: "\n")
     }
 
     func resetAddresses() {
@@ -165,13 +175,16 @@ final class NetworkStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        if case .connected(let ep) = link, await load(from: ep) {
-            if reason == .user { Haptics.light() }
+        // Timer refreshes stick with a working path; a network change or manual refresh re-probes
+        // both so the phone moves back to site Wi‑Fi (or over to the overlay) as soon as it can.
+        let sticky = reason == .timer || reason == .launch
+        if sticky, case .connected(let ep) = link, await load(from: ep) {
             return
         }
         if lastSuccess == nil { link = .connecting }
 
         let results = await probeAll()
+        lastProbes = results
         if let hit = results.first(where: \.reachable) {
             latencyMs = hit.latencyMs
             if await load(from: hit.endpoint) {

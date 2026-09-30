@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum CheckState: Equatable {
     case pending, running, pass, warn, fail, skipped
@@ -27,11 +28,14 @@ final class ConnectionCheck: ObservableObject {
     @Published var verdict: Verdict?
     @Published var running = false
     @Published var finishedAt: Date?
+    @Published var phoneLines: [DiagLine] = []
+    @Published var reports: [PathReport] = []
 
     func run(store: NetworkStore) async {
         guard !running else { return }
         running = true
         verdict = nil
+        reports = []
         steps = [
             CheckStep(id: "phone", title: "This phone's network"),
             CheckStep(id: "lan", title: ConnectionPath.lan.longTitle),
@@ -47,18 +51,26 @@ final class ConnectionCheck: ObservableObject {
 
         update("phone", .running)
         let phone = PhoneInterfaces.current()
+        phoneLines = PathDiagnostics.phoneSummary(phone)
         update("phone", phone.hasWiFi || phone.cellularActive || phone.hasVPN ? .pass : .fail, phoneDetail(phone))
 
         update("lan", .running)
         update("overlay", .running)
-        let results = await store.probeAll()
-        let lan = results.first { $0.endpoint.path == .lan }
-        let overlay = results.first { $0.endpoint.path == .overlay }
+        let eps = store.endpoints()
+        let found = await withTaskGroup(of: PathReport.self) { group in
+            for ep in eps { group.addTask { await PathDiagnostics.run(ep) } }
+            var out: [PathReport] = []
+            for await r in group { out.append(r) }
+            return out
+        }
+        reports = found.sorted { $0.path == .lan && $1.path != .lan }
+        let lan = reports.first { $0.path == .lan }
+        let overlay = reports.first { $0.path == .overlay }
         apply(lan, to: "lan")
         apply(overlay, to: "overlay")
 
         let reached = [lan, overlay].compactMap { $0 }.first(where: \.reachable)
-        if let net = reached?.network {
+        if let net = reached?.probe?.network {
             update("hub", net.hub.connected ? .pass : .fail,
                    net.hub.connected ? "The site gateway is connected to the cloud hub." : "The site gateway is up but can't reach the cloud hub.")
             let c = net.devices
@@ -81,18 +93,58 @@ final class ConnectionCheck: ObservableObject {
         await store.refresh(.pathChange)
     }
 
+    /// Plain-text version of everything on screen, for pasting into a support message.
+    func reportText(store: NetworkStore) -> String {
+        var out = ["LOJO Networks connection check — \(finishedAt.map { $0.formatted(date: .abbreviated, time: .standard) } ?? "running")"]
+        if let v = verdict { out.append("Result: \(v.title)") }
+        out.append("")
+        out.append("Phone")
+        for l in phoneLines { out.append("  \(l.label): \(l.value)") }
+        for r in reports {
+            out.append("")
+            out.append("\(r.path.longTitle) — \(r.reachable ? "OK" : "FAILED") (\(r.totalMs) ms)")
+            for l in r.lines { out.append("  \(l.label): \(l.value)") }
+        }
+        out.append("")
+        out.append("App \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") · iOS \(UIDevice.current.systemVersion)")
+        return out.joined(separator: "\n")
+    }
+
     private func runDemo() async {
+        phoneLines = [
+            DiagLine(label: "Wi‑Fi", value: "Not connected", status: .skip),
+            DiagLine(label: "Cellular", value: "Active", status: .ok),
+            DiagLine(label: "VPN tunnel", value: "utun4 100.96.2.41", status: .ok),
+        ]
         for id in ["phone", "lan", "overlay", "hub", "devices"] {
             update(id, .running)
             try? await Task.sleep(for: .milliseconds(260))
             switch id {
             case "phone": update(id, .pass, "Cellular data · VPN tunnel active")
             case "lan": update(id, .warn, "Not on site Wi‑Fi — expected while you're away.")
-            case "overlay": update(id, .pass, "Site gateway answered in 38 ms.")
+            case "overlay": update(id, .pass, "Site gateway answered in 41 ms.")
             case "hub": update(id, .pass, "The site gateway is connected to the cloud hub.")
             default: update(id, .pass, "5 online, 1 offline.")
             }
         }
+        reports = [
+            PathReport(path: .lan, address: "http://192.168.20.2:8801", lines: [
+                DiagLine(label: "Address", value: "http://192.168.20.2:8801", status: .info),
+                DiagLine(label: "Type", value: GatewayAddress.HostClass.privateLAN.title, status: .info),
+                DiagLine(label: "DNS", value: "Not needed (IP address)", status: .skip),
+                DiagLine(label: "TCP 8801", value: "No TCP answer (timed out) after 5002 ms", status: .fail),
+                DiagLine(label: "HTTP", value: "NSURLErrorTimedOut (-1001) after 5003 ms", status: .fail),
+                DiagLine(label: "Meaning", value: TransportFailure(code: -1001).meaning, status: .info),
+            ], probe: nil, tcpOK: false, totalMs: 10_010),
+            PathReport(path: .overlay, address: "http://100.96.8.2:8801", lines: [
+                DiagLine(label: "Address", value: "http://100.96.8.2:8801", status: .info),
+                DiagLine(label: "Type", value: GatewayAddress.HostClass.overlay.title, status: .info),
+                DiagLine(label: "DNS", value: "Not needed (IP address)", status: .skip),
+                DiagLine(label: "TCP 8801", value: "Connected in 38 ms via utun4 (VPN tunnel) from 100.96.2.41", status: .ok),
+                DiagLine(label: "HTTP", value: "200 OK in 41 ms", status: .ok),
+                DiagLine(label: "Gateway", value: "mesa-gateway · hub connected · arrived via overlay", status: .ok),
+            ], probe: nil, tcpOK: true, totalMs: 84),
+        ]
         verdict = Verdict(
             tone: .good, icon: "lock.shield.fill",
             title: "Connected through your private overlay",
@@ -110,32 +162,32 @@ final class ConnectionCheck: ObservableObject {
         if let detail { steps[i].detail = detail }
     }
 
-    private func apply(_ result: ProbeResult?, to id: String) {
-        guard let result else {
+    private func apply(_ report: PathReport?, to id: String) {
+        guard let report else {
             update(id, .skipped, "No address configured.")
             return
         }
-        if result.reachable {
-            update(id, .pass, "Site gateway answered in \(result.latencyMs ?? 0) ms.")
+        if report.reachable {
+            update(id, .pass, "Site gateway answered in \(report.probe?.latencyMs ?? 0) ms.")
         } else {
-            let why = result.error?.errorDescription ?? "No answer."
-            update(id, id == "lan" ? .warn : .fail, why)
+            let tag = report.probe?.error?.technical ?? "No answer"
+            update(id, id == "lan" ? .warn : .fail, tag)
         }
     }
 
     private func phoneDetail(_ p: PhoneInterfaces) -> String {
         var parts: [String] = []
-        if let ip = p.wifiIPv4 { parts.append("Wi‑Fi \(ip)") }
+        if p.hasWiFi { parts.append("Wi‑Fi") }
         if p.cellularActive { parts.append("Cellular data") }
         parts.append(p.hasVPN ? "VPN tunnel active" : "No VPN tunnel")
         if !p.hasWiFi && !p.cellularActive && !p.hasVPN { return "No Wi‑Fi, cellular or VPN connection." }
         return parts.joined(separator: " · ")
     }
 
-    static func verdict(phone: PhoneInterfaces, lan: ProbeResult?, overlay: ProbeResult?) -> Verdict {
+    static func verdict(phone: PhoneInterfaces, lan: PathReport?, overlay: PathReport?) -> Verdict {
         let viaLAN = lan?.reachable == true
         let viaOverlay = overlay?.reachable == true
-        let net = (viaLAN ? lan : overlay)?.network
+        let net = (viaLAN ? lan : overlay)?.probe?.network
 
         if let net, !net.hub.connected {
             return Verdict(
@@ -152,6 +204,7 @@ final class ConnectionCheck: ObservableObject {
             var tips: [String] = []
             if viaOverlay { tips.append("The private overlay also works, so you'll stay connected when you leave.") }
             else if !phone.hasVPN { tips.append("Before you leave the site, turn on your LOJO VPN profile to keep access.") }
+            if phone.hasVPN { tips.append("Your VPN is on as well; the app uses whichever path answers, preferring site Wi‑Fi.") }
             return Verdict(
                 tone: .good, icon: "wifi",
                 title: "You're on site Wi‑Fi",
@@ -163,12 +216,25 @@ final class ConnectionCheck: ObservableObject {
             return Verdict(
                 tone: .good, icon: "lock.shield.fill",
                 title: "Connected through your private overlay",
-                message: "You're not on site Wi‑Fi, and your LOJO VPN profile is carrying traffic over the encrypted private overlay. Your devices stay off the public internet.",
+                message: "Your LOJO VPN profile is carrying traffic over the encrypted private overlay. Your devices stay off the public internet.",
                 tips: []
             )
         }
 
-        if case .localNetworkDenied? = lan?.error, !viaOverlay {
+        let reports = [lan, overlay].compactMap { $0 }
+        if let blocked = reports.first(where: { report in
+            if case .transport(let f)? = report.probe?.error { return f.isATSBlock }
+            return false
+        }) {
+            return Verdict(
+                tone: .bad, icon: "lock.trianglebadge.exclamationmark",
+                title: "iOS blocked the connection",
+                message: "iOS App Transport Security refused plain HTTP to \(blocked.address). This is an app configuration problem, not your network\(blocked.tcpOK ? " — the gateway port itself answered" : "").",
+                tips: ["Update LOJO Networks to the latest build.", "Share the diagnostics below with LOJO support."]
+            )
+        }
+
+        if case .localNetworkDenied? = lan?.probe?.error, !viaOverlay {
             return Verdict(
                 tone: .bad, icon: "hand.raised.fill",
                 title: "Local Network access is off",
@@ -177,6 +243,15 @@ final class ConnectionCheck: ObservableObject {
                     "Open Settings › Privacy & Security › Local Network and turn on LOJO Networks.",
                     "Away from the site? Your LOJO VPN profile works without this permission.",
                 ]
+            )
+        }
+
+        if let open = reports.first(where: { $0.tcpOK && !$0.reachable }) {
+            return Verdict(
+                tone: .bad, icon: "exclamationmark.octagon.fill",
+                title: "Gateway port open, but no valid reply",
+                message: "Something at \(open.address) accepted the connection but didn't answer like a LOJO site gateway (\(open.probe?.error?.technical ?? "no reply")).",
+                tips: ["Check that the gateway address in Settings is right.", "Restart the site gateway if it keeps happening."]
             )
         }
 
@@ -189,9 +264,10 @@ final class ConnectionCheck: ObservableObject {
             tips = ["Turn off Airplane Mode or join a Wi‑Fi network, then run the check again."]
         } else if phone.hasVPN {
             title = "VPN is on, but your network didn't answer"
-            message = "A VPN tunnel is active on this phone, but the site gateway didn't respond through it."
+            message = "A VPN tunnel is active (\(phone.vpnSummary ?? "utun")), but the site gateway didn't respond through it."
             tips = [
                 "Make sure the VPN profile you connected is your LOJO profile for this network.",
+                "Check the overlay address in Settings matches your site gateway.",
                 "The site gateway may be powered off or offline — check it at the site.",
             ]
         } else {
@@ -208,7 +284,9 @@ final class ConnectionCheck: ObservableObject {
 
 struct ConnectionCheckView: View {
     @EnvironmentObject private var store: NetworkStore
+    @EnvironmentObject private var router: Router
     @StateObject private var check = ConnectionCheck()
+    @State private var showDiagnostics = true
 
     var body: some View {
         ScrollView {
@@ -223,6 +301,7 @@ struct ConnectionCheckView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(check.running)
+                diagnostics
                 explainer
             }
             .padding(16)
@@ -232,6 +311,14 @@ struct ConnectionCheckView: View {
         .toolbar {
             if store.isDemo {
                 ToolbarItem(placement: .topBarLeading) { DemoBadge() }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.showSettings = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .accessibilityLabel("Gateway addresses")
             }
         }
         .task { await check.run(store: store) }
@@ -317,11 +404,53 @@ struct ConnectionCheckView: View {
         .card(padding: 14)
     }
 
+    @ViewBuilder
+    private var diagnostics: some View {
+        if !check.reports.isEmpty || !check.phoneLines.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showDiagnostics.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Diagnostics")
+                                .font(.headline)
+                            Image(systemName: showDiagnostics ? "chevron.up" : "chevron.down")
+                                .font(.caption.weight(.bold))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = check.reportText(store: store)
+                        Haptics.success()
+                        store.show(Toast(style: .info, message: "Diagnostics copied. Paste them into a message to LOJO support."))
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .disabled(check.running)
+                }
+                if showDiagnostics {
+                    DiagBlock(title: "This phone", systemImage: "iphone", ok: nil, lines: check.phoneLines)
+                    ForEach(check.reports) { r in
+                        DiagBlock(title: r.path.longTitle, systemImage: r.path.systemImage, ok: r.reachable, lines: r.lines,
+                                  footer: "\(r.totalMs) ms total")
+                    }
+                    Text("Addresses shown are private network addresses. No passwords or keys are ever displayed.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .card(padding: 14)
+        }
+    }
+
     private var explainer: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("How your phone reaches your devices")
                 .font(.subheadline.weight(.semibold))
-            Text("At the site, the app talks to your site gateway directly over Wi‑Fi. Away from the site, your LOJO VPN profile joins this phone to your private overlay so the same gateway answers — encrypted end to end. Your cameras and controls are never published to the public internet.")
+            Text("At the site, the app talks to your site gateway directly over Wi‑Fi. Away from the site, your LOJO VPN profile joins this phone to your private overlay so the same gateway answers — encrypted end to end. The app tries both automatically. Your cameras and controls are never published to the public internet.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -357,6 +486,70 @@ struct ConnectionCheckView: View {
         case .good: return LojoTheme.online
         case .caution: return LojoTheme.warning
         case .bad: return LojoTheme.danger
+        }
+    }
+}
+
+struct DiagBlock: View {
+    let title: String
+    let systemImage: String
+    let ok: Bool?
+    let lines: [DiagLine]
+    var footer: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage).foregroundStyle(LojoTheme.accent)
+                Text(title).font(.subheadline.weight(.semibold))
+                Spacer()
+                if let ok {
+                    Text(ok ? "OK" : "FAILED")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(ok ? LojoTheme.online : LojoTheme.danger)
+                }
+            }
+            ForEach(lines) { line in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: icon(line.status))
+                        .font(.caption2)
+                        .foregroundStyle(color(line.status))
+                        .frame(width: 12)
+                    Text(line.label)
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 66, alignment: .leading)
+                    Text(line.value)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(line.status == .fail ? LojoTheme.danger : .primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if let footer {
+                Text(footer)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.04)))
+    }
+
+    private func icon(_ s: DiagLine.Status) -> String {
+        switch s {
+        case .ok: return "checkmark"
+        case .fail: return "xmark"
+        case .info: return "info"
+        case .skip: return "minus"
+        }
+    }
+
+    private func color(_ s: DiagLine.Status) -> Color {
+        switch s {
+        case .ok: return LojoTheme.online
+        case .fail: return LojoTheme.danger
+        case .info, .skip: return .secondary
         }
     }
 }

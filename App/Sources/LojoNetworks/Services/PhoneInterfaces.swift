@@ -8,12 +8,14 @@ struct PhoneInterfaces: Sendable, Equatable {
     var wifiIPv4: String?
     var cellularActive: Bool
     var vpnIPv4: String?
+    var vpnInterface: String?
 
     var hasWiFi: Bool { wifiIPv4 != nil }
     var hasVPN: Bool { vpnIPv4 != nil }
+    var vpnSummary: String? { vpnIPv4.map { "\(vpnInterface ?? "utun") \($0)" } }
 
     static func current() -> PhoneInterfaces {
-        var result = PhoneInterfaces(wifiIPv4: nil, cellularActive: false, vpnIPv4: nil)
+        var result = PhoneInterfaces(wifiIPv4: nil, cellularActive: false, vpnIPv4: nil, vpnInterface: nil)
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0, let first = head else { return result }
         defer { freeifaddrs(head) }
@@ -32,7 +34,10 @@ struct PhoneInterfaces: Sendable, Equatable {
             } else if name.hasPrefix("pdp_ip") {
                 result.cellularActive = true
             } else if name.hasPrefix("utun") || name.hasPrefix("ipsec") || name.hasPrefix("ppp") {
-                if !ip.hasPrefix("169.254.") { result.vpnIPv4 = ip }
+                if !ip.hasPrefix("169.254.") {
+                    result.vpnIPv4 = ip
+                    result.vpnInterface = name
+                }
             }
         }
         return result
@@ -42,7 +47,13 @@ struct PhoneInterfaces: Sendable, Equatable {
         var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
         let rc = getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
         guard rc == 0 else { return nil }
-        return String(cString: host)
+        return String(cCharBuffer: host)
+    }
+}
+
+extension String {
+    init(cCharBuffer buf: [CChar]) {
+        self = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }
 
