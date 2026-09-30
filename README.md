@@ -22,10 +22,10 @@ and no Simulator; "run" means the physical phone.
 |---|---|
 | `App/` | xtool project. `xtool.yml` (bundle `com.lojo.PrivateNetworks`, on-device `XTL-HG9HAYXW44.com.lojo.PrivateNetworks`), `Info.plist`, `Resources/AppIcon.png`, `Sources/LojoNetworks/` |
 | `App/Sources/LojoNetworks/Model` | Codable models for the gateway `v1` API, naming rules, event kinds |
-| `App/Sources/LojoNetworks/Services` | `GatewayClient` (HTTP, probes, error wording), `PhoneInterfaces` (Wi‑Fi/cellular/VPN detection) |
+| `App/Sources/LojoNetworks/Services` | `GatewayClient` (HTTP, probes, exact error codes and wording), `GatewayAddress` (normalise/classify addresses), `PathDiagnostics` (DNS/TCP/HTTP per-path report), `PhoneInterfaces` (Wi‑Fi/cellular/VPN detection) |
 | `App/Sources/LojoNetworks/Store` | `NetworkStore` (state, LAN→overlay failover, capture/GPIO flows, demo), `LaunchOptions` (QA hooks) |
-| `App/Sources/LojoNetworks/Views` | Home, Device detail, Activity, Map, Connection check, Onboarding, Settings |
-| `App/Sources/LojoNetworks/Demo` | Demo network "Juniper Mesa Ranch" + procedurally drawn camera stills |
+| `App/Sources/LojoNetworks/Views` | Home, Device detail, Activity, Map, Connection check, Onboarding, Setup, Settings |
+| `App/Sources/LojoNetworks/Demo` | Demo network "Juniper Mesa Ranch", procedurally drawn camera stills and site plan |
 | `App/Sources/LojoNetworks/Design` | Theme, cards, status dots, buttons, haptics, toasts |
 | `sidecar/` | Site gateway `ranch-field-api` (Node 20). Source of truth for `~/.local/share/ranch-field-api/` |
 | `scripts/` | `deploy-phone.sh`, `sync-app.sh`, `phone-shot.sh`, `deploy-sidecar.sh`, `make-icon.py` |
@@ -77,6 +77,17 @@ the build dir is disposable. Signing on NTFS (`LOJODESKDRIVE`) fails with `0xe80
    networks?” → tap Allow**. Without it the LAN path is blocked, and the Connection check says so.
    You can change it later in Settings → Privacy & Security → Local Network → LOJO Networks.
 
+**Install stall while that prompt is on screen.** If the app is in the foreground showing the
+Local Network prompt (or any system alert) when you reinstall, `xtool dev run` can hang at
+`[Installing] 100%` indefinitely. Stop it (Ctrl‑C), bring another app to the front, then rerun:
+
+```bash
+pymobiledevice3 developer core-device launch-application --userspace XTL-HG9HAYXW44.com.lojo.HelloLab ''
+scripts/deploy-phone.sh
+```
+
+The prompt's answer survives reinstalls, so this only bites before someone taps Allow or Don't Allow.
+
 ### 7-day free-profile re-sign
 
 A free Apple ID gives a ~1-year development certificate but a **~7-day provisioning profile**.
@@ -96,12 +107,15 @@ RanchField, LOJO Networks) and 10 new App IDs per week. USB only; no TestFlight 
 scripts/deploy-sidecar.sh   # syntax check, back up live server.js, copy, restart, curl /health + /v1/network
 ```
 
+The gateway re-lists the hub roster every 60 s and 6 s after any device leaves, because the hub
+doesn't re-announce a device that drops and rejoins within a second or two.
+
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health`, `/devices`, `/devices/:id`, `/devices/:id/still` | Legacy, unchanged (old Ranch Field app) |
 | POST | `/devices/:id/capture` | Webcam still request; now 503 when the hub is disconnected (it used to be silently queued) |
 | POST | `/devices/:id/gpio` | `{pin:"11", value:0\|1}` → Cloud Run `controlState`; pin = 40-pin header position (11 = GPIO 17); 503 when hub down |
-| GET | `/v1/network` | Gateway/hub health, counts, `arrivedVia` = `lan` / `overlay` / `local` |
+| GET | `/v1/network` | Gateway/hub health, counts, `arrivedVia` = `lan` / `overlay` / `local`, `seenFrom` (the caller's address as the gateway sees it) |
 | GET | `/v1/devices` | Roster incl. offline devices (keyed by stable name), camera, GPIO, `location {lat,lon,source}` |
 | GET | `/v1/events?limit=&device=` | Activity log (ring of 300, persisted in `~/.local/state/ranch-field-api/state.json`) |
 
@@ -116,11 +130,14 @@ scripts/phone-shot.sh OUT.png [KEY=VALUE ...]    # launches (kills existing) the
 | Variable | Values |
 |---|---|
 | `LOJO_DEMO` | `1` demo network, `0` live gateway (persisted) |
-| `LOJO_SCREEN` | `home`, `detail`, `activity`, `map`, `check`, `onboarding`, `settings` |
+| `LOJO_SCREEN` | `home`, `detail`, `activity`, `map`, `check`, `onboarding`, `setup`, `settings` |
 | `LOJO_DEVICE` | key or name for `detail`, e.g. `north-gate`, `SantaWebcam` |
 | `LOJO_CONFIRM_GPIO` | pin; opens the GPIO confirmation sheet on `detail` (nothing is sent) |
 | `LOJO_SIMULATE_OFFLINE` | `1` routes both paths to unroutable TEST-NET addresses (real failure path) |
 | `LOJO_APPEARANCE` | `light` / `dark` / `system` |
+| `LOJO_LAN`, `LOJO_OVERLAY` | override the site Wi‑Fi / overlay gateway address for this launch (IP or host name, port defaults to 8801) |
+| `LOJO_SCROLL` | `diagnostics` scrolls the Connection check to its diagnostics card when it finishes |
+| `LOJO_AUTOTEST` | debug builds only: on `detail`, `capture` or `gpio:<pin>:<0\|1>` runs that action through the same code as the buttons (real hardware!) |
 
 Examples:
 
@@ -129,6 +146,38 @@ scripts/phone-shot.sh /tmp/home.png   LOJO_DEMO=0 LOJO_SCREEN=home
 scripts/phone-shot.sh /tmp/gate.png   LOJO_DEMO=1 LOJO_SCREEN=detail LOJO_DEVICE=north-gate LOJO_CONFIRM_GPIO=11
 scripts/phone-shot.sh /tmp/off.png    LOJO_DEMO=0 LOJO_SCREEN=check LOJO_SIMULATE_OFFLINE=1
 ```
+
+### Connection check and diagnostics
+
+The Connection tab tests both paths at once, each with 5 s step timeouts, and shows a plain
+verdict plus a **Diagnostics** card per path: address and type (RFC 1918 LAN, 100.64/10 overlay,
+host name, `.local`), DNS (resolved addresses and time, or "not needed" for IPs), a raw TCP connect
+(time, interface such as `en0 (Wi‑Fi)` or `utun4 (VPN tunnel)`, local address), the HTTP result
+with the exact `NSURLError` name and code plus the POSIX error (e.g. `NSURLErrorCannotConnectToHost
+(-1004) · ENETUNREACH (51)`) and what it means, and the gateway's name and how it saw the phone.
+**Copy** puts the whole report on the clipboard for support. No passwords, keys or device
+identifiers are ever shown. Settings and Setup have a per-address **Test** button that uses the
+same probe.
+
+`App/Info.plist` must keep `NSAllowsArbitraryLoads` and must **not** gain `NSAllowsLocalNetworking`:
+with that key present iOS ignores arbitrary loads and blocks plain HTTP to the 100.64/10 overlay
+(`-1022`). `NSExceptionDomains` can't express IP ranges.
+
+### End-to-end capture and GPIO from the phone
+
+Runs from the phone through the gateway and the Cloud Run hub. GPIO physically switches header
+pin 11 (GPIO 17) on the LabWebcam Pi, so only do it when that's safe:
+
+```bash
+LOJO_SHOT_WAIT=25 scripts/phone-shot.sh /tmp/cap.png LOJO_DEMO=0 LOJO_SCREEN=detail LOJO_DEVICE=SantaWebcam LOJO_AUTOTEST=capture
+LOJO_SHOT_WAIT=12 scripts/phone-shot.sh /tmp/on.png  LOJO_DEMO=0 LOJO_SCREEN=detail LOJO_DEVICE=LabWebcam LOJO_AUTOTEST=gpio:11:1
+LOJO_SHOT_WAIT=12 scripts/phone-shot.sh /tmp/off.png LOJO_DEMO=0 LOJO_SCREEN=detail LOJO_DEVICE=LabWebcam LOJO_AUTOTEST=gpio:11:0
+curl -s 'http://127.0.0.1:8801/v1/events?limit=4'     # capture.requested/completed, gpio.set with via
+ssh -i ~/.ssh/id_ed25519_labpi pi@100.96.1.115 'raspi-gpio get 17'   # level=1 after ON, 0 after OFF
+```
+
+Device agents number GPIO by **40-pin header position** (rpi-gpio's default), so the app shows
+"Header pin 11 · GPIO 17" and the gateway rejects non-GPIO header positions.
 
 Gateway checks from santa: `curl -s http://192.168.7.103:8801/v1/network` (LAN) and
 `curl -s http://100.96.1.18:8801/v1/network` (overlay). Both should say `"hub":{"connected":true`.
@@ -141,6 +190,27 @@ What to verify by hand on the phone (the host can't tap):
 - Turn Wi‑Fi off (with no VPN): within 15 s the health card goes red, the last roster stays
   visible with a "last known state" banner, and actions are disabled with an explanation.
 - Settings → Demo network toggles cleanly between demo and live.
+- Settings → Connection setup: both paths test automatically; with no VPN connected the overlay
+  row is amber ("expected until you connect your LOJO VPN"), not red.
+
+## Screenshots
+
+All taken on the iPhone 11 with `scripts/phone-shot.sh` (demo network uses fictional names and a
+drawn site plan; the live map is deliberately not captured because live positions are real places).
+
+| File | Screen |
+|---|---|
+| `01-onboarding.png` | Welcome, page 1 |
+| `02-setup.png` | Connect your network: site Wi‑Fi answering, overlay expected-off without VPN |
+| `03-home-live.png` / `04-home-demo.png` / `05-home-demo-light.png` | Network home, live and demo, dark and light |
+| `06-detail-demo.png` / `08-detail-live.png` | Device detail (camera still, controls, facts) |
+| `07-gpio-confirm.png` | GPIO confirmation sheet |
+| `09-activity-live.png` / `10-activity-demo.png` | Activity timeline (live shows the end-to-end capture and GPIO test) |
+| `11-map-demo.png` | Map (demo site plan) |
+| `12-check-demo.png` | Connection check, away from site on the overlay |
+| `13-check-live.png` / `14-check-live-diagnostics.png` | Connection check on site Wi‑Fi, verdict and diagnostics |
+| `15-settings.png` | Settings with gateway addresses and Test buttons |
+| `16-offline.png` | Not connected: plain reason plus exact per-path codes |
 
 ## Hard rules (from `~/CURSOR_ONBOARDING.md`)
 
