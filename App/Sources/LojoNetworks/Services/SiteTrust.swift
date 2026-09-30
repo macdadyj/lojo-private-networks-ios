@@ -27,6 +27,14 @@ struct SiteCA: Sendable, Equatable {
 
     var fullFingerprint: String { SiteCA.pairs(sha256).joined(separator: ":") }
 
+    /// The fingerprint broken into lines of whole bytes, so it never wraps mid-byte.
+    static func fingerprintLines(_ hex: String, perLine: Int) -> String {
+        let p = pairs(hex)
+        return stride(from: 0, to: p.count, by: perLine)
+            .map { p[$0..<min($0 + perLine, p.count)].joined(separator: ":") }
+            .joined(separator: "\n")
+    }
+
     static func hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

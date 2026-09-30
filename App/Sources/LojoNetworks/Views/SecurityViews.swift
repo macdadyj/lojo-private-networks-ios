@@ -80,8 +80,8 @@ struct PairingView: View {
             }
 
             Section {
-                Text(offer.fingerprint)
-                    .font(.caption.monospaced())
+                Text(SiteCA.fingerprintLines(offer.caSHA256, perLine: 8))
+                    .font(.callout.monospaced())
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             } header: {
@@ -157,6 +157,8 @@ struct PairingView: View {
 struct SecuritySection: View {
     /// Set to a pasted offer; the owning NavigationStack pushes `PairingView` for it.
     @Binding var pasted: PairingOffer?
+    /// Setup shows only the status and pairing entry; Settings has the full controls.
+    var compact = false
     @EnvironmentObject private var store: NetworkStore
     @State private var pasteProblem: String?
     @State private var confirmForget = false
@@ -167,55 +169,39 @@ struct SecuritySection: View {
                 LabeledContent("Status") {
                     ProtectionPill(protection: .tls)
                 }
-                LabeledContent("Site CA", value: ca.subject)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Fingerprint (SHA-256)").font(.subheadline)
-                    Text(ca.fullFingerprint)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let current = store.protection, current != .tls {
-                    Label("Right now: \(current.label). \(current.explanation)", systemImage: current.systemImage)
-                        .font(.footnote)
-                        .foregroundStyle(LojoTheme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Toggle(isOn: $store.legacyOverVPN) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Legacy HTTP over VPN")
-                        Text("Fallback when HTTPS doesn't answer")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                if compact {
+                    LabeledContent("Site CA") {
+                        Text(ca.shortFingerprint).font(.callout.monospaced())
                     }
-                }
-                .onChange(of: store.legacyOverVPN) {
-                    Haptics.selection()
-                    Task { await store.refresh(.user) }
+                } else {
+                    pairedDetails(ca)
                 }
             } else {
                 LabeledContent("Status") {
                     ProtectionPill(protection: .none)
                 }
             }
-            Button {
-                pastePairingCode()
-            } label: {
-                Label(store.isPaired ? "Pair again from pasted code" : "Paste pairing code", systemImage: "doc.on.clipboard")
+            if !(compact && store.isPaired) {
+                Button {
+                    pastePairingCode()
+                } label: {
+                    Label(store.isPaired ? "Pair again from pasted code" : "Paste pairing code", systemImage: "doc.on.clipboard")
+                }
             }
             if let pasteProblem {
                 Text(pasteProblem)
                     .font(.caption)
                     .foregroundStyle(LojoTheme.danger)
             }
-            if store.isPaired {
+            if store.isPaired && !compact {
                 Button("Forget pairing", role: .destructive) { confirmForget = true }
             }
         } header: {
             Text("Security")
         } footer: {
-            Text(store.isPaired
+            Text(store.isPaired && compact
+                 ? "Paired: the app uses HTTPS checked against this site's certificate. Manage it in Settings › Security."
+                 : store.isPaired
                  ? "HTTPS is used on site Wi‑Fi and the overlay. Legacy HTTP over VPN is only tried on the overlay, where the VPN still encrypts it; it's never used on site Wi‑Fi once paired."
                  : "Not paired: the app uses plain HTTP, which anyone on site Wi‑Fi can read. To encrypt it, scan the gateway's pairing QR code with the iPhone Camera app, or copy the lojo://pair code and paste it here.")
         }
@@ -224,6 +210,37 @@ struct SecuritySection: View {
             Button("Forget pairing", role: .destructive) { store.forgetPairing() }
         } message: {
             Text("The app will fall back to unencrypted HTTP until you pair again.")
+        }
+    }
+
+    @ViewBuilder
+    private func pairedDetails(_ ca: SiteCA) -> some View {
+        LabeledContent("Site CA", value: ca.subject)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Fingerprint (SHA-256)").font(.subheadline)
+            Text(SiteCA.fingerprintLines(ca.sha256, perLine: 16))
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let current = store.protection, current != .tls {
+            Label("Right now: \(current.label). \(current.explanation)", systemImage: current.systemImage)
+                .font(.footnote)
+                .foregroundStyle(LojoTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        Toggle(isOn: $store.legacyOverVPN) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Legacy HTTP over VPN")
+                Text("Fallback when HTTPS doesn't answer")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: store.legacyOverVPN) {
+            Haptics.selection()
+            Task { await store.refresh(.user) }
         }
     }
 

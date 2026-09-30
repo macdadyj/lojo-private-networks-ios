@@ -121,10 +121,19 @@ final class NetworkStore: ObservableObject {
         self.defaults = defaults
         isDemo = launch.demo ?? defaults.bool(forKey: Keys.demo)
         networkName = defaults.string(forKey: Keys.networkName) ?? Self.defaultName
-        lanAddress = defaults.string(forKey: Keys.lan) ?? Self.defaultLAN
-        overlayAddress = defaults.string(forKey: Keys.overlay) ?? Self.defaultOverlay
+        var lan = defaults.string(forKey: Keys.lan) ?? Self.defaultLAN
+        var overlay = defaults.string(forKey: Keys.overlay) ?? Self.defaultOverlay
+        if launch.unpair {
+            SiteTrustStore.delete()
+            Self.clearPairedDefaults(defaults)
+            lan = Self.legacyAddress(lan, fallback: Self.defaultLAN)
+            overlay = Self.legacyAddress(overlay, fallback: Self.defaultOverlay)
+            defaults.set(lan, forKey: Keys.lan)
+            defaults.set(overlay, forKey: Keys.overlay)
+        }
+        lanAddress = lan
+        overlayAddress = overlay
         legacyOverVPN = defaults.object(forKey: Keys.legacyOverVPN) as? Bool ?? true
-        if launch.unpair { SiteTrustStore.delete() }
         let ca = SiteTrustStore.load()
         siteCA = ca
         dataSession = GatewayClient.makeSession(timeout: 8, anchor: ca)
@@ -205,7 +214,7 @@ final class NetworkStore: ObservableObject {
     var failureSummary: String? {
         guard link == .unreachable, !lastProbes.isEmpty else { return nil }
         return lastProbes.compactMap { p in
-            p.error.map { "\(p.endpoint.path.title): \($0.technical)" }
+            p.error.map { "\(p.endpoint.path.title) \(p.endpoint.secure ? "HTTPS" : "HTTP"): \($0.technical)" }
         }.joined(separator: "\n")
     }
 
@@ -306,18 +315,23 @@ final class NetworkStore: ObservableObject {
     func forgetPairing() {
         SiteTrustStore.delete()
         siteCA = nil
-        defaults.removeObject(forKey: Keys.pairedLAN)
-        defaults.removeObject(forKey: Keys.pairedOverlay)
-        func legacy(_ address: String, fallback: String) -> String {
-            guard let url = GatewayAddress.normalize(address), url.scheme == "https" else { return address }
-            return GatewayAddress.legacy(url)?.absoluteString ?? fallback
-        }
-        lanAddress = legacy(lanAddress, fallback: Self.defaultLAN)
-        overlayAddress = legacy(overlayAddress, fallback: Self.defaultOverlay)
+        Self.clearPairedDefaults(defaults)
+        lanAddress = Self.legacyAddress(lanAddress, fallback: Self.defaultLAN)
+        overlayAddress = Self.legacyAddress(overlayAddress, fallback: Self.defaultOverlay)
         lastProbes = []
         link = .connecting
         show(Toast(style: .warning, message: "Pairing removed. The app now uses unencrypted HTTP on site Wi‑Fi."))
         Task { await refreshAfterTrustChange() }
+    }
+
+    private static func legacyAddress(_ address: String, fallback: String) -> String {
+        guard let url = GatewayAddress.normalize(address), url.scheme == "https" else { return address }
+        return GatewayAddress.legacy(url)?.absoluteString ?? fallback
+    }
+
+    private static func clearPairedDefaults(_ defaults: UserDefaults) {
+        defaults.removeObject(forKey: Keys.pairedLAN)
+        defaults.removeObject(forKey: Keys.pairedOverlay)
     }
 
     /// A refresh already in flight is still using the old endpoints, so wait it out first.
@@ -353,7 +367,7 @@ final class NetworkStore: ObservableObject {
            await load(from: ep) {
             return
         }
-        if lastSuccess == nil { link = .connecting }
+        if lastSuccess == nil && link != .unreachable { link = .connecting }
 
         let results = await probeAll()
         lastProbes = results

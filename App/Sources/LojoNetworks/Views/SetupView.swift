@@ -30,7 +30,7 @@ struct SetupView: View {
                         .textInputAutocapitalization(.words)
                 }
 
-                SecuritySection(pasted: $pastedOffer)
+                SecuritySection(pasted: $pastedOffer, compact: true)
 
                 Section {
                     AddressRow(path: .lan, text: $store.lanAddress, active: store.link.path == .lan, autoTest: round)
