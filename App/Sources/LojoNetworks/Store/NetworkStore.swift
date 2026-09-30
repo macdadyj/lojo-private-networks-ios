@@ -91,8 +91,20 @@ final class NetworkStore: ObservableObject {
         }
     }
 
+    /// Whether this build offers the legacy-HTTP-over-VPN fallback at all: the `LOJOLegacyHTTPOverVPN`
+    /// Info.plist key, which `scripts/deploy-phone.sh` sets (on for dev, off with `--release`).
+    static let legacyOverVPNAvailable: Bool = {
+        if let set = Bundle.main.object(forInfoDictionaryKey: "LOJOLegacyHTTPOverVPN") as? Bool { return set }
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }()
+
     /// After pairing, also try plain HTTP on the overlay (protected by the VPN tunnel only) when
-    /// HTTPS doesn't answer — for gateways still on the pre-1.4 service.
+    /// HTTPS doesn't answer — for gateways still on the pre-1.4 service. Ignored when the build
+    /// doesn't offer the fallback.
     @Published var legacyOverVPN: Bool {
         didSet { defaults.set(legacyOverVPN, forKey: Keys.legacyOverVPN) }
     }
@@ -204,7 +216,7 @@ final class NetworkStore: ObservableObject {
         if let url = GatewayAddress.normalize(lan) { out.append(GatewayEndpoint(path: .lan, baseURL: url)) }
         if let url = GatewayAddress.normalize(overlay) {
             out.append(GatewayEndpoint(path: .overlay, baseURL: url))
-            if url.scheme == "https", legacyOverVPN, let legacy = GatewayAddress.legacy(url) {
+            if url.scheme == "https", Self.legacyOverVPNAvailable, legacyOverVPN, let legacy = GatewayAddress.legacy(url) {
                 out.append(GatewayEndpoint(path: .overlay, baseURL: legacy))
             }
         }

@@ -13,6 +13,12 @@
 	see docs/tls.md). The labelled legacy-HTTP fallback runs on Network.framework (PlainHTTP.swift),
 	which ATS does not govern.
 	-->
+	<!--
+	Offer the paired "Legacy HTTP over VPN" fallback. This is the dev value; scripts/deploy-phone.sh
+	sets it false in the build copy for release builds (see README "Dev and release builds").
+	-->
+	<key>LOJOLegacyHTTPOverVPN</key>
+	<true/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -104,7 +104,9 @@ final class ConnectionCheck: ObservableObject {
         out.append("")
         out.append("Phone")
         for l in phoneLines { out.append("  \(l.label): \(l.value)") }
+        out.append("  Site: \(store.displayNetworkName)")
         out.append("  Pinned site CA: \(store.siteCA?.fullFingerprint ?? "not paired")")
+        out.append("  Legacy HTTP over VPN: \(NetworkStore.legacyOverVPNAvailable ? (store.legacyOverVPN ? "on" : "off") : "not in this build")")
         for r in reports {
             out.append("")
             out.append("\(r.title) — \(r.reachable ? "OK" : "FAILED") (\(r.totalMs) ms)")

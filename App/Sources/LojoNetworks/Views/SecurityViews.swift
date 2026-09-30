@@ -201,8 +201,10 @@ struct SecuritySection: View {
         } footer: {
             Text(store.isPaired && compact
                  ? "Paired: the app uses HTTPS checked against this site's certificate. Manage it in Settings › Security."
-                 : store.isPaired
+                 : store.isPaired && NetworkStore.legacyOverVPNAvailable
                  ? "HTTPS is used on site Wi‑Fi and the overlay. Legacy HTTP over VPN is only tried on the overlay, where the VPN still encrypts it; it's never used on site Wi‑Fi once paired."
+                 : store.isPaired
+                 ? "HTTPS is used on site Wi‑Fi and the overlay. This app never falls back to unencrypted HTTP once paired."
                  : "Not paired: the app uses plain HTTP, which anyone on site Wi‑Fi can read. To encrypt it, scan the gateway's pairing QR code with the iPhone Camera app, or copy the lojo://pair code and paste it here.")
         }
         .disabled(store.isDemo)
@@ -230,17 +232,19 @@ struct SecuritySection: View {
                 .foregroundStyle(LojoTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        Toggle(isOn: $store.legacyOverVPN) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Legacy HTTP over VPN")
-                Text("Fallback when HTTPS doesn't answer")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        if NetworkStore.legacyOverVPNAvailable {
+            Toggle(isOn: $store.legacyOverVPN) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Legacy HTTP over VPN")
+                    Text("Fallback when HTTPS doesn't answer")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-        }
-        .onChange(of: store.legacyOverVPN) {
-            Haptics.selection()
-            Task { await store.refresh(.user) }
+            .onChange(of: store.legacyOverVPN) {
+                Haptics.selection()
+                Task { await store.refresh(.user) }
+            }
         }
     }
 
