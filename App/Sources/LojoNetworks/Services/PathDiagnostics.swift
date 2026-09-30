@@ -21,24 +21,44 @@ struct PathReport: Sendable, Identifiable {
     let probe: ProbeResult?
     let tcpOK: Bool
     let totalMs: Int
+    var protection: GatewayEndpoint.Protection = .none
 
-    var id: ConnectionPath { path }
+    var id: String { address }
     var reachable: Bool { probe?.reachable == true }
+    var title: String {
+        switch protection {
+        case .tls: return "\(path.longTitle) · HTTPS"
+        case .vpnOnly, .none: return "\(path.longTitle) · HTTP (legacy)"
+        }
+    }
 }
 
 enum PathDiagnostics {
     static let stepTimeout: TimeInterval = 5
 
-    static func run(_ endpoint: GatewayEndpoint) async -> PathReport {
+    static func run(_ endpoint: GatewayEndpoint, anchor: SiteCA?) async -> PathReport {
         let started = Date()
         var lines: [DiagLine] = []
         let url = endpoint.baseURL
         let host = url.host ?? ""
-        let port = UInt16(url.port ?? (url.scheme == "https" ? 443 : GatewayAddress.defaultPort))
+        let port = UInt16(GatewayAddress.port(of: url))
         let hostClass = GatewayAddress.classify(host)
 
         lines.append(DiagLine(label: "Address", value: url.absoluteString, status: .info))
         lines.append(DiagLine(label: "Type", value: hostClass.title, status: .info))
+        switch endpoint.protection {
+        case .tls:
+            lines.append(DiagLine(label: "Scheme", value: "HTTPS (TLS, pinned site CA)", status: .info))
+            if let anchor {
+                lines.append(DiagLine(label: "Pin", value: "Site CA \(anchor.shortFingerprint) (Keychain)", status: .ok))
+            } else {
+                lines.append(DiagLine(label: "Pin", value: "Not paired — no site CA in the Keychain", status: .fail))
+            }
+        case .vpnOnly:
+            lines.append(DiagLine(label: "Scheme", value: "HTTP (legacy) — encrypted by the VPN only", status: .info))
+        case .none:
+            lines.append(DiagLine(label: "Scheme", value: "HTTP (legacy) — unencrypted", status: .info))
+        }
 
         var connectHost = host
         if hostClass.isLiteral {
@@ -63,18 +83,34 @@ enum PathDiagnostics {
             lines.append(DiagLine(label: "TCP \(port)", value: "\(tcp.error ?? "Failed") after \(tcp.ms) ms", status: .fail))
         }
 
-        let probe = await GatewayClient.probe(endpoint, timeout: stepTimeout)
+        let probe = await GatewayClient.probe(endpoint, anchor: anchor, timeout: stepTimeout)
+        if endpoint.secure {
+            if probe.reachable {
+                var parts = [probe.tls?.version ?? "TLS", "chain verified to site CA"]
+                if let until = ISODate.parse(probe.network?.tls?.leafNotAfter) {
+                    parts.append("cert until \(until.formatted(date: .abbreviated, time: .omitted))")
+                }
+                lines.append(DiagLine(label: "TLS", value: parts.joined(separator: " · "), status: .ok))
+            } else if let tls = probe.error?.tlsFailure {
+                lines.append(DiagLine(label: "TLS", value: tls.technical + (tls.detail.map { " — \($0)" } ?? ""), status: .fail))
+            } else if tcp.ok {
+                lines.append(DiagLine(label: "TLS", value: "No TLS result (\(probe.error?.technical ?? "no reply"))", status: .fail))
+            } else {
+                lines.append(DiagLine(label: "TLS", value: "Not attempted (no TCP connection)", status: .skip))
+            }
+        }
         if let net = probe.network {
-            lines.append(DiagLine(label: "HTTP", value: "200 OK in \(probe.latencyMs ?? 0) ms", status: .ok))
+            lines.append(DiagLine(label: endpoint.secure ? "HTTPS" : "HTTP", value: "200 OK in \(probe.latencyMs ?? 0) ms", status: .ok))
             var gw = "\(net.gateway.name) · hub \(net.hub.connected ? "connected" : "OFFLINE")"
             if let via = net.arrivedVia { gw += " · arrived via \(via)" }
+            if let scheme = net.scheme { gw += " as \(scheme)" }
             lines.append(DiagLine(label: "Gateway", value: gw, status: net.hub.connected ? .ok : .fail))
             if let seen = net.seenFrom {
                 lines.append(DiagLine(label: "Seen as", value: seen, status: .info))
             }
         } else if let err = probe.error {
             let ms = probe.elapsedMs.map { " after \($0) ms" } ?? ""
-            lines.append(DiagLine(label: "HTTP", value: "\(err.technical)\(ms)", status: .fail))
+            lines.append(DiagLine(label: endpoint.secure ? "HTTPS" : "HTTP", value: "\(err.technical)\(ms)", status: .fail))
             lines.append(DiagLine(label: "Meaning", value: err.errorDescription ?? "", status: .info))
         }
 
@@ -84,7 +120,8 @@ enum PathDiagnostics {
             lines: lines,
             probe: probe,
             tcpOK: tcp.ok,
-            totalMs: Int(Date().timeIntervalSince(started) * 1000)
+            totalMs: Int(Date().timeIntervalSince(started) * 1000),
+            protection: endpoint.protection
         )
     }
 

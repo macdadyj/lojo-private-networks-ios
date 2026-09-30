@@ -26,9 +26,35 @@ enum ConnectionPath: String, Codable, Sendable, CaseIterable {
     }
 }
 
-struct GatewayEndpoint: Sendable, Hashable {
+struct GatewayEndpoint: Sendable, Hashable, Identifiable {
     let path: ConnectionPath
     let baseURL: URL
+
+    var id: String { baseURL.absoluteString }
+    var secure: Bool { baseURL.scheme == "https" }
+
+    /// How traffic on this endpoint is protected.
+    var protection: Protection {
+        if secure { return .tls }
+        return path == .overlay ? .vpnOnly : .none
+    }
+
+    var title: String {
+        switch protection {
+        case .tls: return "\(path.longTitle) · HTTPS"
+        case .vpnOnly: return "\(path.longTitle) · legacy HTTP"
+        case .none: return "\(path.longTitle) · HTTP (unencrypted)"
+        }
+    }
+
+    enum Protection: Sendable {
+        /// HTTPS, verified against the pinned site CA.
+        case tls
+        /// Plain HTTP carried inside the VPN tunnel: encrypted in transit by the VPN only.
+        case vpnOnly
+        /// Plain HTTP on site Wi‑Fi: readable by anyone on that network.
+        case none
+    }
 }
 
 struct GatewayNetwork: Codable, Sendable, Hashable {
@@ -51,6 +77,14 @@ struct GatewayNetwork: Codable, Sendable, Hashable {
         var total: Int
     }
 
+    struct TLS: Codable, Sendable, Hashable {
+        var enabled: Bool
+        var port: Int?
+        var caSha256: String?
+        var leafSha256: String?
+        var leafNotAfter: String?
+    }
+
     var ok: Bool
     var version: String?
     var gateway: Gateway
@@ -59,6 +93,9 @@ struct GatewayNetwork: Codable, Sendable, Hashable {
     var arrivedVia: String?
     var seenFrom: String?
     var serverTime: String?
+    /// "https" or "http" as the gateway saw this request (1.4.0+).
+    var scheme: String?
+    var tls: TLS?
 }
 
 struct Device: Codable, Identifiable, Hashable, Sendable {

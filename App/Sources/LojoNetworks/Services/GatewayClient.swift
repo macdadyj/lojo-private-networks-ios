@@ -97,6 +97,12 @@ enum GatewayError: LocalizedError, Sendable {
     case badResponse
     case transport(TransportFailure)
     case localNetworkDenied
+    case tls(TLSFailure)
+
+    var tlsFailure: TLSFailure? {
+        if case .tls(let f) = self { return f }
+        return nil
+    }
 
     var errorDescription: String? {
         switch self {
@@ -109,6 +115,8 @@ enum GatewayError: LocalizedError, Sendable {
             return failure.meaning
         case .localNetworkDenied:
             return "iOS is blocking this app from the local network (Local Network permission is off)."
+        case .tls(let f):
+            return f.meaning
         }
     }
 
@@ -121,6 +129,7 @@ enum GatewayError: LocalizedError, Sendable {
             if let p = f.posixText { return "\(f.codeName) · \(p)" }
             return f.codeName
         case .localNetworkDenied: return "Local network prohibited"
+        case .tls(let f): return f.technical
         }
     }
 
@@ -134,15 +143,32 @@ enum GatewayError: LocalizedError, Sendable {
         }
     }
 
-    static func wrap(_ error: Error) -> GatewayError {
+    static func wrap(_ error: Error, url: URL? = nil) -> GatewayError {
         if let e = error as? GatewayError { return e }
         if let e = error as? URLError {
+            if url?.scheme == "https", let tls = tlsFailure(e, url: url) { return .tls(tls) }
             // iOS reports a declined Local Network permission as an unsatisfied path, not a distinct code.
             let path = String(describing: e.userInfo["_NSURLErrorNWPathKey"] ?? "")
             if path.localizedCaseInsensitiveContains("local network prohibited") { return .localNetworkDenied }
             return .transport(TransportFailure(e))
         }
         return .badResponse
+    }
+
+    /// The pinning delegate's verdict if it refused the certificate, otherwise the TLS alert
+    /// URLSession reported (e.g. errSSLClosedAbort when the port speaks plain HTTP).
+    private static func tlsFailure(_ e: URLError, url: URL?) -> TLSFailure? {
+        let tlsCodes: Set<Int> = [-999, -1200, -1201, -1202, -1203, -1204, -1205, -1206]
+        guard tlsCodes.contains(e.errorCode) else { return nil }
+        if let recorded = TLSObserver.shared.failure(TLSObserver.key(url)) { return recorded }
+        guard e.errorCode != -999 else { return nil }
+        let infos = [e.userInfo, (e.userInfo[NSUnderlyingErrorKey] as? NSError)?.userInfo ?? [:]]
+        for info in infos {
+            if info["_kCFStreamErrorDomainKey"] as? Int == 3, let code = info["_kCFStreamErrorCodeKey"] as? Int {
+                return TLSFailure(kind: .handshake(code: code))
+            }
+        }
+        return TLSFailure(kind: .handshake(code: e.errorCode))
     }
 }
 
@@ -152,6 +178,7 @@ struct ProbeResult: Sendable {
     let latencyMs: Int?
     let error: GatewayError?
     var elapsedMs: Int? = nil
+    var tls: TLSSession? = nil
 
     var reachable: Bool { network != nil }
 }
@@ -160,13 +187,20 @@ struct GatewayClient: Sendable {
     let endpoint: GatewayEndpoint
     let session: URLSession
 
-    static func makeSession(timeout: TimeInterval) -> URLSession {
+    /// HTTPS requests on this session trust only `anchor` (the pinned site CA). Plain-HTTP
+    /// endpoints bypass URLSession entirely (see `PlainHTTP`).
+    static func makeSession(timeout: TimeInterval, anchor: SiteCA?, pairingSHA256: String? = nil) -> URLSession {
+        makeSession(timeout: timeout, delegate: PinningDelegate(anchor: anchor, pairingSHA256: pairingSHA256))
+    }
+
+    static func makeSession(timeout: TimeInterval, delegate: PinningDelegate) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout * 2
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: config)
+        config.tlsMinimumSupportedProtocolVersion = .TLSv12
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
     private struct DevicesEnvelope: Decodable {
@@ -216,16 +250,35 @@ struct GatewayClient: Sendable {
         try await post("devices/\(escape(socketID))/gpio", body: body)
     }
 
-    static func probe(_ endpoint: GatewayEndpoint, timeout: TimeInterval = 5) async -> ProbeResult {
-        let client = GatewayClient(endpoint: endpoint, session: makeSession(timeout: timeout))
+    static func probe(_ endpoint: GatewayEndpoint, anchor: SiteCA?, timeout: TimeInterval = 5) async -> ProbeResult {
+        let session = makeSession(timeout: timeout, anchor: anchor)
+        defer { session.finishTasksAndInvalidate() }
+        let client = GatewayClient(endpoint: endpoint, session: session)
         let start = Date()
+        let tls = { endpoint.secure ? TLSObserver.shared.session(TLSObserver.key(endpoint.baseURL)) : nil }
         do {
             let net = try await client.network()
             let ms = Int(Date().timeIntervalSince(start) * 1000)
-            return ProbeResult(endpoint: endpoint, network: net, latencyMs: ms, error: nil, elapsedMs: ms)
+            return ProbeResult(endpoint: endpoint, network: net, latencyMs: ms, error: nil, elapsedMs: ms, tls: tls())
         } catch {
             let ms = Int(Date().timeIntervalSince(start) * 1000)
-            return ProbeResult(endpoint: endpoint, network: nil, latencyMs: nil, error: GatewayError.wrap(error), elapsedMs: ms)
+            return ProbeResult(endpoint: endpoint, network: nil, latencyMs: nil,
+                               error: GatewayError.wrap(error, url: endpoint.baseURL), elapsedMs: ms)
+        }
+    }
+
+    /// Connects with only the pairing code's CA fingerprint to go on and, if the gateway's chain
+    /// contains that exact CA and verifies against it, returns the CA certificate to pin.
+    static func pair(_ endpoint: GatewayEndpoint, caSHA256: String, timeout: TimeInterval = 6) async -> Result<(SiteCA, GatewayNetwork), GatewayError> {
+        let delegate = PinningDelegate(anchor: nil, pairingSHA256: caSHA256)
+        let session = makeSession(timeout: timeout, delegate: delegate)
+        defer { session.finishTasksAndInvalidate() }
+        do {
+            let net = try await GatewayClient(endpoint: endpoint, session: session).network()
+            guard let ca = delegate.capturedCA else { return .failure(.tls(TLSFailure(kind: .pairingMismatch(presented: nil)))) }
+            return .success((ca, net))
+        } catch {
+            return .failure(GatewayError.wrap(error, url: endpoint.baseURL))
         }
     }
 
@@ -266,11 +319,14 @@ struct GatewayClient: Sendable {
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         do {
+            if request.url?.scheme == "http" {
+                return try await PlainHTTP.send(request, timeout: session.configuration.timeoutIntervalForRequest)
+            }
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw GatewayError.badResponse }
             return (data, http)
         } catch {
-            throw GatewayError.wrap(error)
+            throw GatewayError.wrap(error, url: request.url)
         }
     }
 }
