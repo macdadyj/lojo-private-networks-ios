@@ -6,7 +6,7 @@ import LojoSSH
 /// shell or trust a host key, so release builds ignore them.
 struct TerminalLaunch: Sendable {
     enum Screen: String, Sendable {
-        case hosts, keys, session, settings
+        case hosts, keys, settings
     }
 
     var screen: Screen?

@@ -39,6 +39,11 @@ if [[ -z "$UDID" && "$BUILD_ONLY" == 0 ]]; then
   echo "No iPhone on USB. Plug it in, unlock it and tap Trust." >&2
   exit 1
 fi
+# Two installs over one USB link corrupt each other; another checkout may be deploying.
+if [[ "$BUILD_ONLY" == 0 ]] && pgrep -f 'xtool.* dev run' >/dev/null; then
+  echo "Another 'xtool dev run' is installing to the phone. Wait for it to finish (pgrep -af xtool)." >&2
+  exit 1
+fi
 
 BUILD_DIR="$("$REPO/scripts/sync-app.sh")"
 cd "$BUILD_DIR"

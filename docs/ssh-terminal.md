@@ -66,10 +66,13 @@ App/  (xtool app, bundle com.lojo.PrivateNetworks)
 │     OverlayPolicy.swift           allowed destination ranges, *.lan resolution
 │     KeyImport.swift               unencrypted openssh-key-v1 Ed25519 / P-256 and PEM P-256 import
 └── Sources/LojoNetworks/Terminal   Terminal tab
-      TerminalModels / HostStore    saved hosts and groups, gateway directory cache
-      SSHKeyStore / KnownHostsStore Keychain + Secure Enclave keys, known_hosts file
-      TerminalSession / TerminalCenter  one SSH session per tab, keep-alive, reconnect
-      Terminal*View.swift           hosts list, host editor, keys, session tabs, SwiftTerm bridge
+      TerminalModels / HostStore    saved hosts and groups, gateway directory cache, known_hosts file
+      SSHKeyStore                   Keychain + Secure Enclave keys, saved passwords
+      TerminalSession               one SSH session per tab: SwiftTerm view, keep-alive, reconnect, prompts
+      TerminalCenter                open sessions, credentials, directory refresh, QA launch hooks
+      TerminalHomeView              hosts list, sessions, gateway devices, VPN gate
+      SessionScreen                 tab strip, session bar, host-key/password/changed-key screens, SwiftTerm bridge
+      KeysView / HostEditorView     keys (generate, import, share), host editor, terminal settings
 tools/ssh-smoke                     Linux CLI linking the same LojoSSH sources (symlink) for smoke tests
 gateway/lojo-ssh-directory          santa-side read-only directory: Connexa devices + routes + :22 probe → JSON
 scripts/test-sshd.sh                start|stop|status for the temporary userland test sshd on santa
@@ -114,7 +117,7 @@ SwiftTerm TerminalView ⇄ TerminalSession (@MainActor) ⇄ ShellChannel ⇄ NIO
 
 - **santa, same code:** `tools/ssh-smoke` builds the `LojoSSH` sources for Linux and checks overlay policy, key import (Ed25519 and P-256), first-use trust, exec, pings, PTY shell with window-change and exit status, reconnect from known_hosts, P-256 user auth, refusal of a changed host key, rejection of an unknown user key, and a closed port. Run it with `scripts/test-sshd.sh smoke`.
 - **santa test server:** santa has no system sshd, so `scripts/test-sshd.sh start` runs a temporary **userland** OpenSSH 9.6 server extracted from the matching Ubuntu package. It uses no sudo and no system config, binds only to `100.96.1.18:2222`, is key-only, allows only `jon`, and keeps its own `authorized_keys` under `~/.cache/lojo-ssh-test/`. Stop it with `scripts/test-sshd.sh stop`.
-- **Phone:** `LOJO_BUILD_DIR=~/.local/share/ios-dev/apps/LojoNetworksSSH scripts/deploy-phone.sh` (a separate ext4 build dir, so other work in the default build dir is left alone), then `scripts/phone-shot.sh`. QA launch variables: `LOJO_SCREEN=terminal`, `LOJO_SSH_SCREEN=hosts|keys|session`, `LOJO_SSH_CONNECT=<host label>`, `LOJO_SSH_REDACT=1` (mask addresses in screenshots). DEBUG builds only: `LOJO_SSH_RUN=<command>` types a command once the shell is up; `LOJO_SSH_TRUST_FP=SHA256:…` auto-trusts a first-use host key **only if** its fingerprint equals the one given; `LOJO_SSH_GATEWAY_PORT` points the seeded gateway host at the test server; `LOJO_SSH_ENSURE_KEY=1` creates a Secure Enclave key if none exists.
+- **Phone:** `LOJO_BUILD_DIR=~/.local/share/ios-dev/apps/LojoNetworksSSH scripts/deploy-phone.sh` (a separate ext4 build dir, so other work in the default build dir is left alone), then `scripts/phone-shot.sh`. QA launch variables: `LOJO_SCREEN=terminal`, `LOJO_SSH_SCREEN=hosts|keys|settings`, `LOJO_SSH_CONNECT=<host label>`, `LOJO_SSH_REDACT=1` (mask addresses in screenshots). DEBUG builds only: `LOJO_SSH_RUN=<command>` types a command once the shell is up; `LOJO_SSH_TRUST_FP=SHA256:…` auto-trusts a first-use host key **only if** its fingerprint equals the one given; `LOJO_SSH_GATEWAY_PORT` points the seeded gateway host at the test server; `LOJO_SSH_ENSURE_KEY=1` creates a Secure Enclave key if none exists. DEBUG builds also write the public keys (only) to `Documents/lojo-ssh-public-keys.txt`, so the USB-attached Mac or Linux box can pull them with `pymobiledevice3 apps pull` and add them to a test `authorized_keys`.
 
 ## 9. Later: port forwarding (design only)
 
@@ -133,7 +136,7 @@ SwiftTerm TerminalView ⇄ TerminalSession (@MainActor) ⇄ ShellChannel ⇄ NIO
 
 - The bundle is the same (`XTL-HG9HAYXW44.com.lojo.PrivateNetworks`), so `scripts/deploy-phone.sh` works as before. `scripts/sync-app.sh` now also fetches the pinned SwiftTerm into the build copy.
 - The free provisioning profile expires around 6 Oct 2026. Re-run `scripts/deploy-phone.sh` to re-sign.
-- Check `pgrep -af xtool` before any USB deploy; the script also refuses to start while another `xtool dev run` is active.
+- Check `pgrep -af xtool` before any USB deploy. The script also refuses to install while another `xtool dev run` is active (compile-only `--build` still runs).
 
 ## 12. Decisions for Jon
 

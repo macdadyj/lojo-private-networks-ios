@@ -139,7 +139,7 @@ struct TerminalHomeView: View {
         switch launch.screen {
         case .keys: path = [.keys]
         case .settings: showSettings = true
-        case .hosts, .session, nil: break
+        case .hosts, nil: break
         }
         if let wanted = launch.connect?.lowercased() {
             let match = hosts.hosts.first {
