@@ -11,6 +11,7 @@ struct HostEditorView: View {
     @State private var confirmForgetKey = false
     @State private var confirmDelete = false
     @State private var hasPassword: Bool
+    @State private var revealAddress = false
     private let isNew: Bool
 
     init(draft: HostDraft) {
@@ -44,17 +45,32 @@ struct HostEditorView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Label", text: $host.label)
-                    TextField("Address", text: $host.address)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Port", text: $portText)
-                        .keyboardType(.numberPad)
-                    TextField("User", text: $host.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Group", text: $host.group)
+                    field("Label") { TextField("Pi in the barn", text: $host.label) }
+                    field("Address") {
+                        if center.redact && !revealAddress && !host.address.isEmpty {
+                            HStack {
+                                Spacer()
+                                Text(AddressDisplay.text(host.address, redact: true)).foregroundStyle(.secondary)
+                                Button("Edit") { revealAddress = true }
+                                    .buttonStyle(.borderless)
+                            }
+                        } else {
+                            TextField("100.96.x.x or name.lan", text: $host.address)
+                                .keyboardType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+                    }
+                    field("Port") {
+                        TextField("22", text: $portText)
+                            .keyboardType(.numberPad)
+                    }
+                    field("User") {
+                        TextField("pi", text: $host.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    field("Group") { TextField("Hosts", text: $host.group) }
                 } footer: {
                     if let addressProblem {
                         Text(addressProblem).foregroundStyle(LojoTheme.danger)
@@ -65,7 +81,7 @@ struct HostEditorView: View {
 
                 Section("Authentication") {
                     Picker("Key", selection: $host.keyID) {
-                        Text("Any key on this iPhone").tag(String?.none)
+                        Text("Any key").tag(String?.none)
                         ForEach(keys.keys) { record in
                             Text(record.label).tag(Optional(record.id))
                         }
@@ -129,13 +145,19 @@ struct HostEditorView: View {
                 ForEach(saved, id: \.self) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.keyType).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(entry.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                        FingerprintText(fingerprint: entry.fingerprint)
                     }
                 }
                 Button("Forget saved host key", role: .destructive) { confirmForgetKey = true }
             }
         } header: {
             Text("Host key")
+        }
+    }
+
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        LabeledContent(title) {
+            content().multilineTextAlignment(.trailing)
         }
     }
 
@@ -182,7 +204,9 @@ struct TerminalSettingsView: View {
                                     Image(systemName: "checkmark").foregroundStyle(LojoTheme.accent)
                                 }
                             }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 Section {

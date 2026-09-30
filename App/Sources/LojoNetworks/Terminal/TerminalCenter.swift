@@ -6,13 +6,15 @@ import LojoSSH
 /// shell or trust a host key, so release builds ignore them.
 struct TerminalLaunch: Sendable {
     enum Screen: String, Sendable {
-        case hosts, keys, settings
+        case hosts, keys, settings, edit
     }
 
     var screen: Screen?
-    /// Host label to open a session to at launch ("gateway" matches the seeded gateway host).
+    /// Comma-separated host labels to open sessions to at launch ("gateway" is the seeded gateway host).
     var connect: String?
     var redact = false
+    /// Pull the gateway device list at launch even if the cached one is fresh.
+    var refresh = false
     var run: String?
     var trustFingerprint: String?
     var gatewayPort: Int?
@@ -35,7 +37,8 @@ struct TerminalLaunch: Sendable {
         var launch = TerminalLaunch(
             screen: text("LOJO_SSH_SCREEN").flatMap { Screen(rawValue: $0.lowercased()) },
             connect: text("LOJO_SSH_CONNECT"),
-            redact: flag("LOJO_SSH_REDACT")
+            redact: flag("LOJO_SSH_REDACT"),
+            refresh: flag("LOJO_SSH_REFRESH")
         )
         #if DEBUG
         launch.run = text("LOJO_SSH_RUN")
@@ -159,6 +162,18 @@ final class TerminalCenter: ObservableObject {
     }
 
     // MARK: Gateway directory
+
+    /// True once the gateway's host key is trusted and the VPN is up, so a refresh can't prompt.
+    var canRefreshDirectory: Bool {
+        guard vpnAddress != nil, let gateway = hosts.gateway else { return false }
+        return !hosts.savedHostKeys(for: gateway).isEmpty && directoryState != .loading
+    }
+
+    var directoryIsStale: Bool {
+        guard let generated = hosts.directory?.generatedAt,
+              let date = ISO8601DateFormatter().date(from: generated) else { return true }
+        return Date().timeIntervalSince(date) > 600
+    }
 
     /// Runs `lojo-ssh-directory` on the gateway over SSH. Only against a gateway whose host key is
     /// already trusted: this path never prompts.

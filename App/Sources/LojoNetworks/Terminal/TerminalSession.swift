@@ -168,6 +168,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
         hasConnected = true
         phase = .connected
+        if terminalView.window != nil { focus() }
         if let password = passwordToSave {
             center.keys.savePassword(password, hostID: host.id)
             passwordToSave = nil
@@ -190,6 +191,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             text += " There's no SSH key on this phone yet. Create one under Keys."
         }
         phase = .failed(text)
+        _ = terminalView.resignFirstResponder()
         Haptics.error()
     }
 
@@ -217,6 +219,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             let how = exit.status.map { "exit \($0)" } ?? exit.signal.map { "signal \($0)" } ?? "closed"
             banner("session ended (\(how))", color: 90)
             phase = .ended("Session ended (\(how))")
+            _ = terminalView.resignFirstResponder()
         } else {
             dropped(exit.error)
         }

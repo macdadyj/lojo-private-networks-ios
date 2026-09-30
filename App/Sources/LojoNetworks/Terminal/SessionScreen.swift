@@ -219,9 +219,7 @@ private struct HostKeyPrompt: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
                 Text(key.type).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text(key.fingerprint)
-                    .font(.footnote.monospaced())
-                    .textSelection(.enabled)
+                FingerprintText(fingerprint: key.fingerprint)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -294,8 +292,10 @@ private struct HostKeyChangedView: View {
                         .font(.title.weight(.heavy))
                     Text("\(session.host.label) (\(AddressDisplay.text(session.host.address, redact: center.redact))) answered with a different host key than the one saved on this phone. Someone may be intercepting the connection (possible man-in-the-middle), or the host was reinstalled. The connection was refused.")
                         .font(.body)
-                    fingerprint("Saved", previous.map { "\($0.keyType)  \($0.fingerprint)" }.joined(separator: "\n"))
-                    fingerprint("Now offered", "\(new.type)  \(new.fingerprint)")
+                    ForEach(previous, id: \.self) { entry in
+                        fingerprint("Saved", type: entry.keyType, entry.fingerprint)
+                    }
+                    fingerprint("Now offered", type: new.type, new.fingerprint)
                     Text("If you know why it changed, open the host's settings in the Terminal tab and use Forget saved host key, then connect again and check the new fingerprint.")
                         .font(.subheadline)
                     Button("Close session") { center.close(session) }
@@ -307,10 +307,11 @@ private struct HostKeyChangedView: View {
         }
     }
 
-    private func fingerprint(_ title: String, _ value: String) -> some View {
+    private func fingerprint(_ title: String, type: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased()).font(.caption.weight(.bold)).opacity(0.8)
-            Text(value).font(.footnote.monospaced()).textSelection(.enabled)
+            Text(type).font(.footnote.monospaced())
+            FingerprintText(fingerprint: value)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -345,6 +346,25 @@ private struct EndedCard: View {
     }
 }
 
+/// Breaks a `SHA256:` fingerprint at a fixed point. Automatic wrapping hyphenates it, and a stray
+/// "-" reads as part of the key.
+struct FingerprintText: View {
+    let fingerprint: String
+
+    var body: some View {
+        Text(Self.lines(fingerprint))
+            .font(.footnote.monospaced())
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+    }
+
+    static func lines(_ fingerprint: String) -> String {
+        guard fingerprint.count > 28 else { return fingerprint }
+        let cut = fingerprint.index(fingerprint.startIndex, offsetBy: 28)
+        return String(fingerprint[..<cut]) + "\n" + String(fingerprint[cut...])
+    }
+}
+
 /// Hosts the session's long-lived SwiftTerm view; the same view moves between containers on tab switches.
 private struct TerminalBridge: UIViewRepresentable {
     let session: TerminalSession
@@ -354,19 +374,22 @@ private struct TerminalBridge: UIViewRepresentable {
     }
 
     func updateUIView(_ container: Container, context: Context) {
-        container.host(session.hostView)
+        if container.host(session.hostView), session.isLive {
+            DispatchQueue.main.async { session.focus() }
+        }
     }
 
     final class Container: UIView {
         private weak var child: UIView?
 
-        func host(_ view: UIView) {
-            guard child !== view || view.superview !== self else { return }
+        /// Returns true when the view was (re)attached.
+        func host(_ view: UIView) -> Bool {
+            guard child !== view || view.superview !== self else { return false }
             if let child, child.superview === self { child.removeFromSuperview() }
             addSubview(view)
             child = view
             setNeedsLayout()
-            DispatchQueue.main.async { _ = view.becomeFirstResponder() }
+            return true
         }
 
         override func layoutSubviews() {

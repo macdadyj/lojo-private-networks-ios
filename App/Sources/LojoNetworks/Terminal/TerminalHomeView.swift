@@ -126,6 +126,9 @@ struct TerminalHomeView: View {
 
     private func appear() {
         hosts.seedGateway(overlayGatewayURL: store.launch.overlayOverride ?? store.overlayAddress, port: center.launch.gatewayPort)
+        if center.canRefreshDirectory, center.directoryIsStale || (center.launch.refresh && !center.launchApplied) {
+            Task { await center.refreshDirectory() }
+        }
         guard !center.launchApplied else { return }
         center.launchApplied = true
         let launch = center.launch
@@ -139,9 +142,10 @@ struct TerminalHomeView: View {
         switch launch.screen {
         case .keys: path = [.keys]
         case .settings: showSettings = true
+        case .edit: editing = hosts.gateway.map { HostDraft(host: $0, isNew: false) }
         case .hosts, nil: break
         }
-        if let wanted = launch.connect?.lowercased() {
+        for wanted in (launch.connect ?? "").lowercased().split(separator: ",").map(String.init) {
             let match = hosts.hosts.first {
                 $0.label.lowercased() == wanted || ($0.isGateway && wanted == "gateway")
             }
@@ -226,6 +230,15 @@ private struct HostRow: View {
 private struct GatewayDevicesSection: View {
     @EnvironmentObject private var center: TerminalCenter
     @EnvironmentObject private var hosts: HostStore
+    @State private var showOffline = false
+
+    private var online: [DirectoryEntry] {
+        (hosts.directory?.devices ?? []).filter(\.online).sorted { a, b in
+            a.sshOpen != b.sshOpen ? a.sshOpen : a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    private var offline: [DirectoryEntry] { (hosts.directory?.devices ?? []).filter { !$0.online } }
 
     var body: some View {
         Section {
@@ -242,9 +255,20 @@ private struct GatewayDevicesSection: View {
             case .idle:
                 EmptyView()
             }
-            if let devices = hosts.directory?.devices, !devices.isEmpty {
-                ForEach(devices) { entry in
+            if hosts.directory != nil {
+                ForEach(online) { entry in
                     DirectoryRow(entry: entry)
+                }
+                if !offline.isEmpty {
+                    if showOffline {
+                        ForEach(offline) { entry in
+                            DirectoryRow(entry: entry)
+                        }
+                    }
+                    Button(showOffline ? "Hide offline devices" : "Show \(offline.count) offline devices") {
+                        withAnimation { showOffline.toggle() }
+                    }
+                    .font(.subheadline)
                 }
             } else if center.directoryState == .idle {
                 Text("Pull the list of LOJO devices from the site gateway over SSH. You can save any of them as a host with one tap.")
@@ -286,7 +310,9 @@ private struct DirectoryRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if hosts.isSaved(entry) {
+            if entry.address == center.vpnAddress {
+                Text("This iPhone").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            } else if hosts.isSaved(entry) {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(LojoTheme.online)
                     .accessibilityLabel("Saved")
             } else {
