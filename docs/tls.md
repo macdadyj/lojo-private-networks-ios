@@ -7,7 +7,8 @@ the VPN, without breaking the existing HTTP clients (the old Ranch Field app, de
 
 - **The gateway serves HTTPS on :8443** next to the unchanged HTTP listener on :8801. Both run
   the same Express app, so every route (legacy `/health`, `/devices…`, `/v1/*`) exists on both.
-  `/v1/network` reports `scheme` and `tls {caSha256, leafSha256, leafNotAfter}`. Events record
+  `/v1/network` reports `scheme`, `tls {caSha256, leafSha256, leafNotAfter}` and
+  `site {name}` (1.4.1+, see "Site name" below). Events record
   the scheme a capture or GPIO request arrived on. GPIO still goes only to Cloud Run Pub-Node.
 - **Each site has its own CA** (P-256, 10 years) that signs a short-lived server certificate
   (P-256, 397 days, `serverAuth`, SANs for every LAN/overlay address and name). The CA key never
@@ -40,8 +41,21 @@ both.
 | State | Site Wi‑Fi | Overlay | UI label |
 |---|---|---|---|
 | Not paired | HTTP :8801 | HTTP :8801 | **Unencrypted (legacy HTTP)** (amber) |
-| Paired | HTTPS :8443 only | HTTPS :8443, then HTTP :8801 if "Legacy HTTP over VPN" is on (default) | **Encrypted · pinned** (green) / **Legacy HTTP over VPN** (amber) |
+| Paired | HTTPS :8443 only | HTTPS :8443, then HTTP :8801 if the build offers "Legacy HTTP over VPN" and it's on | **Encrypted · pinned** (green) / **Legacy HTTP over VPN** (amber) |
 
+- **The overlay fallback is a build setting**, the `LOJOLegacyHTTPOverVPN` Info.plist key:
+
+  | Build | Command | Key | Settings › Security |
+  |---|---|---|---|
+  | Dev (debug) | `scripts/deploy-phone.sh` | `true` | "Legacy HTTP over VPN" toggle, default on |
+  | Release / sold | `scripts/deploy-phone.sh --release` | `false` | No toggle; paired phones never use HTTP |
+
+  `App/Info.plist` holds the dev value. `deploy-phone.sh` writes the key into the build copy
+  only, so the repo never changes between flavours; `LOJO_LEGACY_HTTP_OVER_VPN=on|off` overrides
+  it for either one. Without the key, a debug build offers the fallback and a release build
+  doesn't. Unpaired phones use HTTP in both flavours (the label says so) until they're paired.
+  For now Jon's phone stays on the dev build with the fallback on; switch to `--release` when
+  every gateway runs 1.4+.
 - Once paired, the app **never uses plain HTTP on site Wi‑Fi**, so blocking :8443 on the LAN
   can't downgrade it. The overlay fallback exists for gateways still on the pre-1.4 service; it
   is encrypted by the VPN but the gateway's identity isn't checked, and a legacy connection is
@@ -82,3 +96,28 @@ exact failure.
 Rotate the server certificate yearly (it's valid 397 days; `status` warns at 30 days left).
 Adding an address or name means editing `SANS` in `~/.config/lojo-gateway-tls/site.env` and
 running `rotate`.
+
+## Site name
+
+The name on the phone (Home title, Settings, Setup, diagnostics) comes from the gateway, not the
+certificates:
+
+1. `SITE_NAME` in `~/.config/lojo-gateway-tls/site.env` is the source.
+2. `gateway-tls.sh init|rotate` writes it to `~/.local/state/ranch-field-api/tls/site.json`
+   (public, 0600); the gateway loads it at start and on SIGHUP and serves it as `site.name`.
+3. The pairing code carries it as `n=`.
+4. The app adopts `site.name` only from a **pinned HTTPS** answer, and only while the phone's
+   name is still the generic default or the name it last adopted. A name the user typed in
+   Settings is kept.
+
+To rename a site: edit `SITE_NAME`, then `rotate` (new leaf and `site.json`, same CA, phones keep
+working) and `pair` (new QR). Paired phones pick up the new name on their next refresh; nobody
+re-pairs. The CA subject keeps the name the CA was created with (santa's is
+`CN=My Private Network site CA`). That's harmless: phones pin the CA by fingerprint and never
+show its subject, and replacing the CA would force every phone to re-pair.
+
+**What's per-site and what's generic.** `scripts/gateway-tls.sh`'s `site.env` template carries
+santa's values (`SITE_NAME="LOJO VPN"`, its IPs), because it already hard-codes santa's
+addresses and every new site must edit all of it before `init` anyway. The app's built-in
+default name stays the generic "My Private Network": the app is sold to other customers, and a
+fresh install shows that only until it's paired and adopts the site's name.

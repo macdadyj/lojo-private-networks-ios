@@ -62,9 +62,24 @@ scripts/deploy-phone.sh --build   # unsigned compile check
 scripts/deploy-phone.sh           # compile + provision + sign + USB install + launch
 ```
 
+### Dev and release builds
+
+| Flavour | Command | Configuration | "Legacy HTTP over VPN" |
+|---|---|---|---|
+| Dev (what Jon's phone runs now) | `scripts/deploy-phone.sh` | debug (QA hooks such as `LOJO_PAIR_CONFIRM`, `LOJO_AUTOTEST`) | Offered, toggle in Settings › Security, default on |
+| Release / sold | `scripts/deploy-phone.sh --release` | release (optimised, no DEBUG hooks) | Not offered: a paired phone never uses plain HTTP |
+
+Add `--build` to either for a compile check only (`--release --build`). The switch is the
+`LOJOLegacyHTTPOverVPN` Info.plist key. `App/Info.plist` has the dev value (`true`), and
+`deploy-phone.sh` writes the flavour's value into the build-dir copy only. To override it, set
+`LOJO_LEGACY_HTTP_OVER_VPN=on|off`, e.g. a release build that still has the fallback:
+`LOJO_LEGACY_HTTP_OVER_VPN=on scripts/deploy-phone.sh --release`. The script prints the
+configuration and fallback state before building. The fallback stays **on** for now, until the
+project is closer to market. See [`docs/tls.md`](docs/tls.md#legacy-fallback-labelled).
+
 `deploy-phone.sh` rsyncs `App/` into the **ext4** build dir `~/.local/share/ios-dev/apps/LojoNetworks`
 (it refuses non-ext4). It exports `XTL_TMPDIR=~/.cache/xtool-tmp` through the env file, runs
-`xtool dev run --usb --udid <UDID>` (the UDID is read from USB at run time, or from
+`xtool dev run -c debug|release --usb --udid <UDID>` (the UDID is read from USB at run time, or from
 `LOJO_UDID`, and is never stored in the repo), then launches the app with
 `pymobiledevice3 developer core-device launch-application --userspace`. Always edit in the repo;
 the build dir is disposable. Signing on NTFS (`LOJODESKDRIVE`) fails with `0xe8008017`.
@@ -130,8 +145,9 @@ doesn't re-announce a device that drops and rejoins within a second or two.
 | GET | `/v1/devices` | Roster incl. offline devices (keyed by stable name), camera, GPIO, `location {lat,lon,source}` |
 | GET | `/v1/events?limit=&device=` | Activity log (ring of 300, persisted in `~/.local/state/ranch-field-api/state.json`) |
 
-All routes are served on both HTTP :8801 and HTTPS :8443. `/v1/network` adds `scheme` and
-`tls {enabled, port, caSha256, leafSha256, leafNotAfter}`. `capture.requested` and `gpio.set`
+All routes are served on both HTTP :8801 and HTTPS :8443. `/v1/network` adds `scheme`,
+`tls {enabled, port, caSha256, leafSha256, leafNotAfter}` and `site {name}` (the site's display
+name, which paired phones adopt). `capture.requested` and `gpio.set`
 events record the `scheme` they arrived on.
 
 ### Gateway HTTPS: setup and rotation
@@ -153,10 +169,19 @@ scripts/gateway-tls.sh rotate-ca   # only on CA compromise/expiry: every phone m
 | `~/.config/lojo-gateway-tls/ca.crt`, `site.env` | 0600 | CA certificate; site name, SANs, pairing URLs (public, editable) |
 | `~/.local/state/ranch-field-api/tls/server.key` | 0600 | Gateway TLS key |
 | `~/.local/state/ranch-field-api/tls/fullchain.crt`, `server.crt`, `ca.crt`, `pairing-qr.png` | 0600 | Served chain (leaf + CA), leaf, CA copy, QR |
+| `~/.local/state/ranch-field-api/tls/site.json` | 0600 | `{"name": …}` from `SITE_NAME`, served as `site.name` (public) |
 
 Directories are 0700. To add an address or host name the phones use, edit `SANS` (and
 `LAN_URL`/`OVERLAY_URL` for the QR) in `site.env`, then run `rotate` and, if the URLs changed,
-`pair` again. `.gitignore` blocks `*.key`, `*.p12`, `*.pfx` and `pairing-qr.png`.
+`pair` again.
+
+**Renaming the site** (santa's is **LOJO VPN**): edit `SITE_NAME` in `site.env`, run `rotate`
+(new leaf and `site.json`, same CA) and `pair` (new QR). Paired phones show the new name after
+their next refresh, with no re-pairing. The CA's subject keeps its original name
+(`My Private Network site CA` on santa) on purpose, because replacing the CA would force every
+phone to re-pair. The phones never display it. The `site.env` template in `gateway-tls.sh` has
+santa's values; the app's own default name stays the generic "My Private Network" for other
+customers' fresh installs. Details: [`docs/tls.md`](docs/tls.md#site-name). `.gitignore` blocks `*.key`, `*.p12`, `*.pfx` and `pairing-qr.png`.
 
 Checks from santa (the CA certificate is public):
 
@@ -212,7 +237,7 @@ and time, or "not needed" for IPs), a raw TCP connect (time, interface such as `
 fingerprint the phone saw and its expiry, or the exact failure such as `TLS pin mismatch` or
 `TLS errSecHostNameMismatch (-67602)`), the HTTP(S) result
 with the exact `NSURLError` name and code plus the POSIX error (e.g. `NSURLErrorCannotConnectToHost
-(-1004) · ENETUNREACH (51)`) and what it means, and the gateway's name and how it saw the phone.
+(-1004) · ENETUNREACH (51)`) and what it means, the gateway's name, the site name it serves, and how it saw the phone.
 **Copy** puts the whole report on the clipboard for support. No passwords, keys or device
 identifiers are ever shown. Settings and Setup have a per-address **Test** button that uses the
 same probe.
@@ -288,7 +313,7 @@ drawn site plan; the live map is deliberately not captured because live position
 | `11-map-demo.png` | Map (demo site plan) |
 | `12-check-demo.png` | Connection check, away from site on the overlay (HTTPS, pinned) |
 | `13-check-live.png` / `14-check-live-diagnostics.png` | Connection check on site Wi‑Fi: verdict, Encryption step, diagnostics with Scheme / Pin / TLS |
-| `15-settings.png` | Settings › Security: pinned, fingerprint, legacy-over-VPN toggle, forget |
+| `15-settings.png` | Settings › Security: pinned, site name from the gateway, CA fingerprint, legacy-over-VPN toggle (dev build), forget |
 | `16-offline.png` | Not connected: plain reason plus exact per-endpoint codes |
 | `17-pairing.png` | Pairing sheet after scanning the QR code (addresses, CA fingerprint, Pair) |
 | `18-tls-refused.png` / `19-tls-refused-diagnostics.png` | A different CA answering: "Secure connection refused", `TLS pin mismatch` with the presented root |
