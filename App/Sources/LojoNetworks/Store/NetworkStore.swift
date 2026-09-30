@@ -37,8 +37,15 @@ final class NetworkStore: ObservableObject {
 
     static let defaultLAN = "http://192.168.7.103:8801"
     static let defaultOverlay = "http://100.96.1.18:8801"
-    private static let offlineLAN = "http://192.0.2.10:8801"
-    private static let offlineOverlay = "http://198.51.100.10:8801"
+    static let defaultName = "My Private Network"
+    private static let offlineLAN = "192.0.2.10"
+    private static let offlineOverlay = "198.51.100.10"
+
+    enum PairingState: Equatable {
+        case idle
+        case working
+        case failed(String)
+    }
 
     @Published private(set) var link: Link = .connecting
     @Published private(set) var network: GatewayNetwork?
@@ -75,10 +82,28 @@ final class NetworkStore: ObservableObject {
         didSet { defaults.set(overlayAddress, forKey: Keys.overlay) }
     }
 
+    /// The site CA pinned in the Keychain, or nil until this phone is paired with a gateway.
+    @Published private(set) var siteCA: SiteCA? {
+        didSet {
+            guard oldValue != siteCA else { return }
+            dataSession.finishTasksAndInvalidate()
+            dataSession = GatewayClient.makeSession(timeout: 8, anchor: siteCA)
+        }
+    }
+
+    /// After pairing, also try plain HTTP on the overlay (protected by the VPN tunnel only) when
+    /// HTTPS doesn't answer — for gateways still on the pre-1.4 service.
+    @Published var legacyOverVPN: Bool {
+        didSet { defaults.set(legacyOverVPN, forKey: Keys.legacyOverVPN) }
+    }
+
+    @Published var pendingPairing: PairingOffer?
+    @Published private(set) var pairingState: PairingState = .idle
+
     let launch: LaunchOptions
     private let defaults: UserDefaults
     private var demo = DemoNetwork()
-    private let dataSession = GatewayClient.makeSession(timeout: 8)
+    private var dataSession: URLSession
     private var toastTask: Task<Void, Never>?
 
     private enum Keys {
@@ -86,16 +111,25 @@ final class NetworkStore: ObservableObject {
         static let networkName = "lojo.networkName"
         static let lan = "lojo.lanAddress"
         static let overlay = "lojo.overlayAddress"
+        static let pairedLAN = "lojo.pairedLAN"
+        static let pairedOverlay = "lojo.pairedOverlay"
+        static let legacyOverVPN = "lojo.legacyOverVPN"
     }
 
     init(launch: LaunchOptions = .current, defaults: UserDefaults = .standard) {
         self.launch = launch
         self.defaults = defaults
         isDemo = launch.demo ?? defaults.bool(forKey: Keys.demo)
-        networkName = defaults.string(forKey: Keys.networkName) ?? "My Private Network"
+        networkName = defaults.string(forKey: Keys.networkName) ?? Self.defaultName
         lanAddress = defaults.string(forKey: Keys.lan) ?? Self.defaultLAN
         overlayAddress = defaults.string(forKey: Keys.overlay) ?? Self.defaultOverlay
+        legacyOverVPN = defaults.object(forKey: Keys.legacyOverVPN) as? Bool ?? true
+        if launch.unpair { SiteTrustStore.delete() }
+        let ca = SiteTrustStore.load()
+        siteCA = ca
+        dataSession = GatewayClient.makeSession(timeout: 8, anchor: ca)
         if let forced = launch.demo { defaults.set(forced, forKey: Keys.demo) }
+        if let code = launch.pairingCode { pendingPairing = PairingOffer(code: code) }
     }
 
     // MARK: - derived
@@ -139,13 +173,32 @@ final class NetworkStore: ObservableObject {
         events.first { $0.device == device.key && $0.kind == .gpioSet && $0.pin == pin }
     }
 
+    var isPaired: Bool { siteCA != nil }
+
+    /// How the connection in use is protected; nil while nothing is connected.
+    var protection: GatewayEndpoint.Protection? {
+        switch link {
+        case .connected(let ep): return ep.protection
+        case .demo: return .tls
+        case .connecting, .unreachable: return nil
+        }
+    }
+
+    /// Endpoints in order of preference. When paired, HTTPS (pinned) comes first on both paths;
+    /// the labelled legacy fallback is plain HTTP on the overlay only, never on site Wi‑Fi.
     func endpoints() -> [GatewayEndpoint] {
-        let lan = launch.simulateOffline ? Self.offlineLAN : (launch.lanOverride ?? lanAddress)
-        let overlay = launch.simulateOffline ? Self.offlineOverlay : (launch.overlayOverride ?? overlayAddress)
-        return [
-            GatewayAddress.normalize(lan).map { GatewayEndpoint(path: .lan, baseURL: $0) },
-            GatewayAddress.normalize(overlay).map { GatewayEndpoint(path: .overlay, baseURL: $0) },
-        ].compactMap { $0 }
+        let scheme = isPaired ? "https://" : "http://"
+        let lan = launch.simulateOffline ? scheme + Self.offlineLAN : (launch.lanOverride ?? lanAddress)
+        let overlay = launch.simulateOffline ? scheme + Self.offlineOverlay : (launch.overlayOverride ?? overlayAddress)
+        var out: [GatewayEndpoint] = []
+        if let url = GatewayAddress.normalize(lan) { out.append(GatewayEndpoint(path: .lan, baseURL: url)) }
+        if let url = GatewayAddress.normalize(overlay) {
+            out.append(GatewayEndpoint(path: .overlay, baseURL: url))
+            if url.scheme == "https", legacyOverVPN, let legacy = GatewayAddress.legacy(url) {
+                out.append(GatewayEndpoint(path: .overlay, baseURL: legacy))
+            }
+        }
+        return out
     }
 
     /// One line per path explaining the last failure, e.g. "Private overlay: NSURLErrorTimedOut (-1001)".
@@ -164,6 +217,15 @@ final class NetworkStore: ObservableObject {
             return false
         }
         if atsBlocked { return "iOS blocked the connection. Update LOJO Networks." }
+        if let tls = lastProbes.lazy.compactMap({ $0.error?.tlsFailure }).first {
+            switch tls.kind {
+            case .pinMismatch, .pairingMismatch: return "The gateway's certificate doesn't match this phone's pairing."
+            case .hostnameMismatch: return "The gateway's certificate doesn't cover this address."
+            case .expired: return "The gateway's certificate has expired."
+            case .notPaired: return "This phone isn't paired with the gateway yet."
+            case .untrusted, .handshake: return "The secure connection to the gateway failed."
+            }
+        }
         if phone.hasVPN { return "Your VPN is on, but the site gateway didn't answer through it." }
         if phone.hasWiFi { return "This Wi‑Fi isn't your site network, and the LOJO VPN is off." }
         if phone.cellularActive { return "On cellular data without the LOJO VPN." }
@@ -171,9 +233,96 @@ final class NetworkStore: ObservableObject {
     }
 
     func resetAddresses() {
-        lanAddress = Self.defaultLAN
-        overlayAddress = Self.defaultOverlay
+        if isPaired {
+            lanAddress = defaults.string(forKey: Keys.pairedLAN) ?? lanAddress
+            overlayAddress = defaults.string(forKey: Keys.pairedOverlay) ?? overlayAddress
+        } else {
+            lanAddress = Self.defaultLAN
+            overlayAddress = Self.defaultOverlay
+        }
         link = .connecting
+    }
+
+    // MARK: - pairing
+
+    /// Tries every address in the pairing code at once and pins the CA from the first gateway
+    /// whose certificate chain contains exactly the CA the code names.
+    @discardableResult
+    func pair(_ offer: PairingOffer) async -> Bool {
+        pairingState = .working
+        let candidates = [
+            offer.lan.map { GatewayEndpoint(path: .lan, baseURL: $0) },
+            offer.overlay.map { GatewayEndpoint(path: .overlay, baseURL: $0) },
+        ].compactMap { $0 }
+        let results = await withTaskGroup(of: (Int, Result<(SiteCA, GatewayNetwork), GatewayError>).self) { group in
+            for (i, ep) in candidates.enumerated() {
+                group.addTask { (i, await GatewayClient.pair(ep, caSHA256: offer.caSHA256)) }
+            }
+            var out: [(Int, Result<(SiteCA, GatewayNetwork), GatewayError>)] = []
+            for await r in group { out.append(r) }
+            return out.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        var errors: [(ConnectionPath, GatewayError)] = []
+        for (ep, result) in zip(candidates, results) {
+            switch result {
+            case .success(let (ca, net)):
+                do {
+                    try SiteTrustStore.save(ca)
+                } catch {
+                    pairingState = .failed("The certificate couldn't be saved in the Keychain [OSStatus \((error as NSError).code)].")
+                    Haptics.error()
+                    return false
+                }
+                if let lan = offer.lan?.absoluteString {
+                    lanAddress = lan
+                    defaults.set(lan, forKey: Keys.pairedLAN)
+                }
+                if let ov = offer.overlay?.absoluteString {
+                    overlayAddress = ov
+                    defaults.set(ov, forKey: Keys.pairedOverlay)
+                }
+                if networkName == Self.defaultName { networkName = offer.name }
+                siteCA = ca
+                pendingPairing = nil
+                pairingState = .idle
+                lastProbes = []
+                link = .connecting
+                show(Toast(style: .success, message: "Paired with \(net.gateway.name) over \(ep.path.title). Traffic is now encrypted."))
+                Haptics.success()
+                await refresh(.user)
+                return true
+            case .failure(let e):
+                errors.append((ep.path, e))
+            }
+        }
+        let best = errors.first { $0.1.tlsFailure != nil } ?? errors.first
+        pairingState = .failed(best.map { "\($0.0.title): \($0.1.errorDescription ?? "Failed.") [\($0.1.technical)]" }
+                               ?? "The pairing code has no gateway address.")
+        Haptics.error()
+        return false
+    }
+
+    /// Removes the pinned CA and goes back to the gateway's legacy HTTP addresses.
+    func forgetPairing() {
+        SiteTrustStore.delete()
+        siteCA = nil
+        defaults.removeObject(forKey: Keys.pairedLAN)
+        defaults.removeObject(forKey: Keys.pairedOverlay)
+        func legacy(_ address: String, fallback: String) -> String {
+            guard let url = GatewayAddress.normalize(address), url.scheme == "https" else { return address }
+            return GatewayAddress.legacy(url)?.absoluteString ?? fallback
+        }
+        lanAddress = legacy(lanAddress, fallback: Self.defaultLAN)
+        overlayAddress = legacy(overlayAddress, fallback: Self.defaultOverlay)
+        lastProbes = []
+        link = .connecting
+        show(Toast(style: .warning, message: "Pairing removed. The app now uses unencrypted HTTP on site Wi‑Fi."))
+        Task { await refresh(.user) }
+    }
+
+    func dismissPairing() {
+        pendingPairing = nil
+        pairingState = .idle
     }
 
     // MARK: - refresh
@@ -191,8 +340,10 @@ final class NetworkStore: ObservableObject {
 
         // Timer refreshes stick with a working path; a network change or manual refresh re-probes
         // both so the phone moves back to site Wi‑Fi (or over to the overlay) as soon as it can.
+        // A legacy connection isn't sticky while HTTPS is configured, so it upgrades as soon as it can.
         let sticky = reason == .timer || reason == .launch
-        if sticky, case .connected(let ep) = link, await load(from: ep) {
+        if sticky, case .connected(let ep) = link, ep.secure || !endpoints().contains(where: \.secure),
+           await load(from: ep) {
             return
         }
         if lastSuccess == nil { link = .connecting }
@@ -215,9 +366,10 @@ final class NetworkStore: ObservableObject {
 
     func probeAll() async -> [ProbeResult] {
         let eps = endpoints()
+        let anchor = siteCA
         return await withTaskGroup(of: (Int, ProbeResult).self) { group in
             for (i, ep) in eps.enumerated() {
-                group.addTask { (i, await GatewayClient.probe(ep)) }
+                group.addTask { (i, await GatewayClient.probe(ep, anchor: anchor)) }
             }
             var out: [(Int, ProbeResult)] = []
             for await r in group { out.append(r) }
@@ -247,7 +399,7 @@ final class NetworkStore: ObservableObject {
             await loadStills(client: c)
             return true
         } catch {
-            lastError = GatewayError.wrap(error)
+            lastError = GatewayError.wrap(error, url: ep.baseURL)
             return false
         }
     }
