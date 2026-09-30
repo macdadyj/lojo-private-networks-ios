@@ -2,7 +2,9 @@
 
 // REST front for Pub-Node cameras + GPIO via Cloud Run controlState.
 // Does not talk to App Engine Flex.
+const crypto = require("crypto");
 const fs = require("fs");
+const https = require("https");
 const os = require("os");
 const path = require("path");
 const express = require("express");
@@ -16,7 +18,9 @@ const STATE_DIR =
 const LAN_PREFIXES = (process.env.LAN_PREFIXES || "192.168.").split(",");
 const OVERLAY_PREFIXES = (process.env.OVERLAY_PREFIXES || "100.").split(",");
 const MAX_EVENTS = 300;
-const VERSION = "1.3.0";
+const TLS_PORT = Number(process.env.TLS_PORT || 8443);
+const TLS_DIR = process.env.TLS_DIR || path.join(STATE_DIR, "tls");
+const VERSION = "1.4.0";
 const RELIST_MS = 60 * 1000;
 const HEADER_GPIO_PINS = new Set([3, 5, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 21, 22, 23, 24, 26, 27, 28, 29, 31, 32, 33, 35, 36, 37, 38, 40]);
 const startedAt = new Date().toISOString();
@@ -368,6 +372,48 @@ function arrivalPath(req) {
   return "other";
 }
 
+function schemeOf(req) {
+  return req.socket && req.socket.encrypted ? "https" : "http";
+}
+
+// ---------- tls ----------
+
+// HTTPS is additive: plain HTTP on PORT stays for the Ranch Field app and legacy clients.
+// Keys are read from TLS_DIR (0600, created by scripts/gateway-tls.sh) and never logged.
+let tls = null; // { key, cert, caSha256, leafSha256, leafNotAfter }
+
+function loadTLS() {
+  try {
+    const key = fs.readFileSync(path.join(TLS_DIR, "server.key"));
+    const cert = fs.readFileSync(path.join(TLS_DIR, "fullchain.crt"));
+    const leaf = new crypto.X509Certificate(fs.readFileSync(path.join(TLS_DIR, "server.crt")));
+    const ca = new crypto.X509Certificate(fs.readFileSync(path.join(TLS_DIR, "ca.crt")));
+    tls = {
+      key: key,
+      cert: cert,
+      caSha256: crypto.createHash("sha256").update(ca.raw).digest("hex"),
+      leafSha256: crypto.createHash("sha256").update(leaf.raw).digest("hex"),
+      leafNotAfter: new Date(leaf.validTo).toISOString(),
+    };
+    return true;
+  } catch (e) {
+    if (e.code !== "ENOENT") console.log("tls load failed:", e.code || e.message);
+    tls = null;
+    return false;
+  }
+}
+
+function tlsInfo() {
+  if (!tls) return { enabled: false };
+  return {
+    enabled: true,
+    port: TLS_PORT,
+    caSha256: tls.caSha256,
+    leafSha256: tls.leafSha256,
+    leafNotAfter: tls.leafNotAfter,
+  };
+}
+
 function v1Device(k) {
   const pub = k.public;
   const sid = k.online ? k.socketID : null;
@@ -443,6 +489,8 @@ app.get("/v1/network", (req, res) => {
     devices: { online: online, offline: offline, total: online + offline },
     arrivedVia: arrivalPath(req),
     seenFrom: peerAddress(req),
+    scheme: schemeOf(req),
+    tls: tlsInfo(),
     serverTime: new Date().toISOString(),
   });
 });
@@ -502,7 +550,7 @@ app.post("/devices/:id/capture", (req, res) => {
     client: { socketID: id, type: "device" },
     webcam: { enabled: true },
   });
-  addEvent("capture.requested", { device: eventDeviceKey(id), via: arrivalPath(req) });
+  addEvent("capture.requested", { device: eventDeviceKey(id), via: arrivalPath(req), scheme: schemeOf(req) });
   res.json({ ok: true, gpio: true, requested: id });
 });
 
@@ -537,7 +585,13 @@ app.post("/devices/:id/gpio", (req, res) => {
   const key = socketToKey.get(id);
   if (key && known.has(key)) known.get(key).public = pub;
   socket.emit("controlState", payload);
-  addEvent("gpio.set", { device: eventDeviceKey(id), pin: pin, value: value, via: arrivalPath(req) });
+  addEvent("gpio.set", {
+    device: eventDeviceKey(id),
+    pin: pin,
+    value: value,
+    via: arrivalPath(req),
+    scheme: schemeOf(req),
+  });
   res.json({ ok: true, flex: false, pin: pin, value: value, device: pub });
 });
 
@@ -548,4 +602,28 @@ app.use((_req, res) => {
 loadState();
 app.listen(PORT, BIND, () => {
   console.log("ranch-field-api", VERSION, BIND + ":" + PORT, "pubnode", PUBNODE_URL, "gpio=true flex=false");
+});
+
+let tlsServer = null;
+function startTLS() {
+  if (tlsServer || !tls) return;
+  tlsServer = https.createServer({ key: tls.key, cert: tls.cert, minVersion: "TLSv1.2" }, app);
+  tlsServer.on("tlsClientError", (err) => console.log("tls client error:", err.code || err.message));
+  tlsServer.listen(TLS_PORT, BIND, () => {
+    console.log("https", BIND + ":" + TLS_PORT, "ca", tls.caSha256.slice(0, 16), "leaf until", tls.leafNotAfter);
+  });
+}
+
+if (loadTLS()) startTLS();
+else console.log("https disabled: no certificate in", TLS_DIR, "(run scripts/gateway-tls.sh init)");
+
+// scripts/gateway-tls.sh rotate sends SIGHUP: swap certificates without dropping HTTP clients.
+process.on("SIGHUP", () => {
+  if (!loadTLS()) return console.log("SIGHUP: no certificate; https unchanged");
+  if (tlsServer) {
+    tlsServer.setSecureContext({ key: tls.key, cert: tls.cert });
+    console.log("SIGHUP: certificate reloaded, leaf until", tls.leafNotAfter);
+  } else {
+    startTLS();
+  }
 });
