@@ -10,6 +10,7 @@ final class Router: ObservableObject {
     @Published var networkPath: [String] = []
     @Published var mapPath: [String] = []
     @Published var showSettings = false
+    @Published var showSetup = false
     @Published var pendingConfirmPin: String?
 }
 
@@ -34,6 +35,7 @@ struct RootView: View {
                 OnboardingView { demo in
                     store.isDemo = demo
                     withAnimation(.easeInOut) { onboarded = true }
+                    if !demo { router.showSetup = true }
                     Task { await store.refresh(.launch) }
                 }
             }
@@ -103,6 +105,9 @@ struct RootView: View {
         .sheet(isPresented: $router.showSettings) {
             SettingsView()
         }
+        .sheet(isPresented: $router.showSetup) {
+            SetupView()
+        }
     }
 
     private func applyLaunchOptions() {
@@ -116,9 +121,12 @@ struct RootView: View {
         case .activity: router.tab = .activity
         case .map: router.tab = .map
         case .check: router.tab = .check
-        case .settings, .setup:
+        case .settings:
             router.tab = .network
             router.showSettings = true
+        case .setup:
+            router.tab = .network
+            router.showSetup = true
         case .detail:
             router.tab = .network
             router.pendingConfirmPin = launch.confirmPin

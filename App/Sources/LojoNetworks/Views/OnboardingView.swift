@@ -16,7 +16,7 @@ struct OnboardingView: View {
              body: "Connect the gear you already own — ranch Pis, gate cameras, pump relays, lab machines — into one private network you control."),
         Page(icon: "lock.shield.fill",
              title: "Private by design",
-             body: "Your phone reaches them over an encrypted private overlay. Nothing is exposed to the public internet — no open ports, no public camera links."),
+             body: "On site, your phone talks to your gateway over Wi‑Fi. Away, your LOJO VPN profile joins it to an encrypted private overlay. No open ports, no public camera links."),
         Page(icon: "hand.tap.fill",
              title: "In your hands, anywhere",
              body: "See what's online, pull a fresh camera still, and switch relays with a confirmation step — on site Wi‑Fi or from the road."),

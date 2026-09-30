@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var store: NetworkStore
+    @EnvironmentObject private var router: Router
     @Environment(\.dismiss) private var dismiss
     @AppStorage("lojo.onboarded") private var onboarded = true
     @AppStorage("lojo.appearance") private var appearanceRaw = Appearance.system.rawValue
@@ -54,6 +55,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button("Connection setup") {
+                        dismiss()
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(450))
+                            router.showSetup = true
+                        }
+                    }
+                    .disabled(store.isDemo)
                     Button("Show welcome screens again") {
                         dismiss()
                         onboarded = false
@@ -93,10 +102,12 @@ struct SettingsView: View {
 }
 
 /// One editable gateway address with validation and a one-tap reachability test.
-private struct AddressRow: View {
+struct AddressRow: View {
     let path: ConnectionPath
     @Binding var text: String
     let active: Bool
+    /// Changing this value runs the test without a tap (used by Setup).
+    var autoTest: Int = 0
     @EnvironmentObject private var store: NetworkStore
     @State private var testing = false
     @State private var result: PathReport?
@@ -139,14 +150,19 @@ private struct AddressRow: View {
                     .font(.caption)
                     .foregroundStyle(LojoTheme.danger)
             } else if let result {
-                Label(summary(result), systemImage: result.reachable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                let expected = !result.reachable && vpnOffForOverlay
+                Label(summary(result), systemImage: result.reachable ? "checkmark.circle.fill"
+                      : expected ? "minus.circle.fill" : "xmark.circle.fill")
                     .font(.caption)
-                    .foregroundStyle(result.reachable ? LojoTheme.online : LojoTheme.danger)
+                    .foregroundStyle(result.reachable ? LojoTheme.online : expected ? LojoTheme.warning : LojoTheme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 2)
         .disabled(store.isDemo)
+        .task(id: autoTest) {
+            if autoTest > 0 { await test() }
+        }
     }
 
     private func test() async {
@@ -162,7 +178,14 @@ private struct AddressRow: View {
             return "\(net.gateway.name) answered in \(r.probe?.latencyMs ?? 0) ms."
         }
         let code = r.probe?.error?.technical ?? "No answer"
+        if vpnOffForOverlay {
+            return "No VPN connected, so this path can't answer yet. That's expected until you connect your LOJO VPN. (\(code))"
+        }
         let meaning = r.probe?.error?.errorDescription ?? ""
         return "\(code) — \(meaning)"
+    }
+
+    private var vpnOffForOverlay: Bool {
+        path == .overlay && !PhoneInterfaces.current().hasVPN
     }
 }
