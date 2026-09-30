@@ -38,6 +38,8 @@ let package = Package(
             name: "LojoNetworks",
             dependencies: [
                 "LojoSSH",
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ]
         ),
