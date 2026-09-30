@@ -4,7 +4,7 @@ import Foundation
 /// They can only be set by a developer launch over USB, never by a customer.
 struct LaunchOptions: Sendable {
     enum Screen: String, Sendable {
-        case home, detail, activity, map, check, onboarding, settings, setup
+        case home, detail, activity, map, check, onboarding, settings, setup, terminal
     }
 
     var demo: Bool?

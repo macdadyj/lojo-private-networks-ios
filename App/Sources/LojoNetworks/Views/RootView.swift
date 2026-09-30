@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: Hashable {
-    case network, activity, map, check
+    case network, activity, map, check, terminal
 }
 
 @MainActor
@@ -17,6 +17,7 @@ final class Router: ObservableObject {
 struct RootView: View {
     @EnvironmentObject private var store: NetworkStore
     @StateObject private var router = Router()
+    @StateObject private var terminal = TerminalCenter()
     @AppStorage("lojo.onboarded") private var onboarded = false
     @AppStorage("lojo.appearance") private var appearanceRaw = Appearance.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
@@ -113,6 +114,13 @@ struct RootView: View {
             }
             .tabItem { Label("Connection", systemImage: "antenna.radiowaves.left.and.right") }
             .tag(AppTab.check)
+
+            TerminalHomeView()
+                .environmentObject(terminal)
+                .environmentObject(terminal.hosts)
+                .environmentObject(terminal.keys)
+                .tabItem { Label("Terminal", systemImage: "apple.terminal") }
+                .tag(AppTab.terminal)
         }
         .sheet(isPresented: $router.showSettings) {
             SettingsView()
@@ -149,6 +157,7 @@ struct RootView: View {
         case .activity: router.tab = .activity
         case .map: router.tab = .map
         case .check: router.tab = .check
+        case .terminal: router.tab = .terminal
         case .settings:
             router.tab = .network
             router.showSettings = true
