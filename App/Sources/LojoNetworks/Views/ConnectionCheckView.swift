@@ -184,7 +184,9 @@ final class ConnectionCheck: ObservableObject {
             update(id, .pass, "Site gateway answered in \(report.probe?.latencyMs ?? 0) ms\(over).")
         } else {
             let tag = report.probe?.error?.technical ?? "No answer"
-            if vpnOff {
+            if report.probe?.error?.tlsFailure != nil {
+                update(id, .fail, tag)
+            } else if vpnOff {
                 update(id, .warn, "LOJO VPN not connected — \(tag)")
             } else if let legacy, legacy.reachable {
                 update(id, .warn, "HTTPS failed (\(tag)); legacy HTTP over VPN answered in \(legacy.probe?.latencyMs ?? 0) ms.")

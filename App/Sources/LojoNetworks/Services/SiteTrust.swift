@@ -97,7 +97,8 @@ struct PairingOffer: Sendable, Hashable, Identifiable {
         guard let comps = URLComponents(string: text), comps.scheme?.lowercased() == "lojo",
               comps.host?.lowercased() == "pair" else { return nil }
         var q: [String: String] = [:]
-        for item in comps.queryItems ?? [] { q[item.name] = item.value }
+        // URLSearchParams (the gateway's encoder) writes spaces as "+", which URLComponents keeps.
+        for item in comps.queryItems ?? [] { q[item.name] = item.value?.replacingOccurrences(of: "+", with: " ") }
         guard q["v"] == "1", let ca = q["ca"]?.lowercased(), ca.count == 64,
               ca.allSatisfy({ $0.isHexDigit }) else { return nil }
         func https(_ s: String?) -> URL? {
@@ -156,7 +157,7 @@ struct TLSFailure: Sendable, Hashable {
         case .handshake(let code):
             switch code {
             case -9806, -9816: return "The connection closed during the TLS handshake. The port may not be speaking HTTPS (is it the legacy HTTP port?)."
-            case -9836, -9831: return "The gateway and phone couldn't agree on a TLS version."
+            case -9836, -9831: return "The other end didn't answer in TLS. Usually the address points at the legacy HTTP port (8801) instead of HTTPS (8443); otherwise the server only offers an old TLS version."
             default: return "The TLS handshake with the gateway failed."
             }
         }

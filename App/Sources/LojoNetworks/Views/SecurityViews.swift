@@ -75,12 +75,8 @@ struct PairingView: View {
 
             Section("Gateway") {
                 LabeledContent("Network", value: offer.name)
-                if let lan = offer.lan {
-                    LabeledContent("Site Wi‑Fi", value: lan.absoluteString).font(.callout.monospaced())
-                }
-                if let ov = offer.overlay {
-                    LabeledContent("Overlay", value: ov.absoluteString).font(.callout.monospaced())
-                }
+                if let lan = offer.lan { addressRow("Site Wi‑Fi", lan) }
+                if let ov = offer.overlay { addressRow("Overlay", ov) }
             }
 
             Section {
@@ -144,6 +140,15 @@ struct PairingView: View {
         }
         .onDisappear {
             if !inSheet, store.pairingState != .working { store.dismissPairing() }
+        }
+    }
+
+    private func addressRow(_ label: String, _ url: URL) -> some View {
+        LabeledContent(label) {
+            Text(url.absoluteString)
+                .font(.footnote.monospaced())
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 }

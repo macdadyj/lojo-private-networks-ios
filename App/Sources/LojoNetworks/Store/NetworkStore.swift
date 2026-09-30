@@ -289,7 +289,7 @@ final class NetworkStore: ObservableObject {
                 link = .connecting
                 show(Toast(style: .success, message: "Paired with \(net.gateway.name) over \(ep.path.title). Traffic is now encrypted."))
                 Haptics.success()
-                await refresh(.user)
+                await refreshAfterTrustChange()
                 return true
             case .failure(let e):
                 errors.append((ep.path, e))
@@ -317,7 +317,14 @@ final class NetworkStore: ObservableObject {
         lastProbes = []
         link = .connecting
         show(Toast(style: .warning, message: "Pairing removed. The app now uses unencrypted HTTP on site Wi‑Fi."))
-        Task { await refresh(.user) }
+        Task { await refreshAfterTrustChange() }
+    }
+
+    /// A refresh already in flight is still using the old endpoints, so wait it out first.
+    private func refreshAfterTrustChange() async {
+        while isRefreshing { try? await Task.sleep(for: .milliseconds(100)) }
+        link = .connecting
+        await refresh(.user)
     }
 
     func dismissPairing() {

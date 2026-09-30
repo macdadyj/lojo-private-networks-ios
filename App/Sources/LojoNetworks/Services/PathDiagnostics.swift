@@ -87,8 +87,11 @@ enum PathDiagnostics {
         if endpoint.secure {
             if probe.reachable {
                 var parts = [probe.tls?.version ?? "TLS", "chain verified to site CA"]
+                if let leaf = probe.tls?.leafSHA256 {
+                    parts.append("leaf " + SiteCA.pairs(leaf).prefix(4).joined(separator: ":") + "…")
+                }
                 if let until = ISODate.parse(probe.network?.tls?.leafNotAfter) {
-                    parts.append("cert until \(until.formatted(date: .abbreviated, time: .omitted))")
+                    parts.append("until \(until.formatted(date: .abbreviated, time: .omitted))")
                 }
                 lines.append(DiagLine(label: "TLS", value: parts.joined(separator: " · "), status: .ok))
             } else if let tls = probe.error?.tlsFailure {
