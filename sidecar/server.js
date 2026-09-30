@@ -16,7 +16,8 @@ const STATE_DIR =
 const LAN_PREFIXES = (process.env.LAN_PREFIXES || "192.168.").split(",");
 const OVERLAY_PREFIXES = (process.env.OVERLAY_PREFIXES || "100.").split(",");
 const MAX_EVENTS = 300;
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
+const RELIST_MS = 60 * 1000;
 const HEADER_GPIO_PINS = new Set([3, 5, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 21, 22, 23, 24, 26, 27, 28, 29, 31, 32, 33, 35, 36, 37, 38, 40]);
 const startedAt = new Date().toISOString();
 
@@ -306,8 +307,10 @@ socket.on("nodeTypeRequest", (data) => {
   });
 });
 
-socket.on("connect-reg", (data) => {
-  socket.emit("secret", data);
+let registered = false;
+
+function relist() {
+  if (!registered || !socket.connected) return;
   listGeneration += 1;
   const gen = listGeneration;
   hub.lastListAt = new Date().toISOString();
@@ -319,7 +322,19 @@ socket.on("connect-reg", (data) => {
       if (k.online && k.lastSeenInList < gen) markOffline(k.key, "not in hub roster");
     });
   }, 8000);
+}
+
+socket.on("connect-reg", (data) => {
+  socket.emit("secret", data);
+  registered = true;
+  relist();
 });
+socket.on("disconnect", () => {
+  registered = false;
+});
+// The hub does not push a device that drops and rejoins within a second or two, so re-list
+// periodically and shortly after any device leaves.
+setInterval(relist, RELIST_MS);
 
 socket.on("build webpage", (payload) => ingest(payload));
 socket.on("remove webpage object", (socketID) => {
@@ -333,6 +348,7 @@ socket.on("remove webpage object", (socketID) => {
     const k = known.get(key);
     if (k && k.socketID === id) markOffline(key, "left the hub");
   }
+  setTimeout(relist, 6000);
 });
 
 // ---------- http ----------
