@@ -8,6 +8,12 @@ enum LojoTheme {
     static let offline = Color.secondary
     static let warning = Color(red: 0.95, green: 0.62, blue: 0.10)
     static let danger = Color(red: 0.90, green: 0.27, blue: 0.25)
+    /// accentDeep is too dark to read on black; controls use this adaptive indigo instead.
+    static let control = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.56, green: 0.61, blue: 0.96, alpha: 1)
+            : UIColor(red: 0.15, green: 0.18, blue: 0.47, alpha: 1)
+    })
 
     static let brandGradient = LinearGradient(
         colors: [accent, accentDeep],
@@ -133,6 +139,8 @@ struct Chip: View {
         Label(text, systemImage: systemImage)
             .font(.caption2.weight(.medium))
             .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .foregroundStyle(.secondary)

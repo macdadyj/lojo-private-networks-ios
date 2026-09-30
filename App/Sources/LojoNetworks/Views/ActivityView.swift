@@ -170,7 +170,7 @@ struct EventRow: View {
         case .captureRequested: return ("camera", LojoTheme.accent)
         case .captureCompleted: return ("photo.fill", LojoTheme.accent)
         case .captureFailed: return ("exclamationmark.triangle.fill", LojoTheme.warning)
-        case .gpioSet: return ("power", event.value == 1 ? LojoTheme.online : LojoTheme.accentDeep)
+        case .gpioSet: return ("power", event.value == 1 ? LojoTheme.online : LojoTheme.control)
         case .hubConnected: return ("cloud.fill", LojoTheme.online)
         case .hubDisconnected: return ("icloud.slash", LojoTheme.danger)
         case .other: return ("circle", .secondary)

@@ -234,7 +234,7 @@ struct SummaryTiles: View {
             tile(value: store.onlineCount, label: "Online", icon: "circle.fill", tint: LojoTheme.online)
             tile(value: store.offlineCount, label: "Offline", icon: "circle", tint: .secondary)
             tile(value: store.cameraCount, label: "Cameras", icon: "video.fill", tint: LojoTheme.accent)
-            tile(value: store.outputCount, label: "Controls", icon: "switch.2", tint: LojoTheme.accentDeep)
+            tile(value: store.outputCount, label: "Controls", icon: "switch.2", tint: LojoTheme.control)
         }
     }
 

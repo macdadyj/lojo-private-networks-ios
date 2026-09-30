@@ -67,7 +67,7 @@ final class ConnectionCheck: ObservableObject {
         let lan = reports.first { $0.path == .lan }
         let overlay = reports.first { $0.path == .overlay }
         apply(lan, to: "lan")
-        apply(overlay, to: "overlay")
+        apply(overlay, to: "overlay", vpnOff: !phone.hasVPN)
 
         let reached = [lan, overlay].compactMap { $0 }.first(where: \.reachable)
         if let net = reached?.probe?.network {
@@ -162,7 +162,7 @@ final class ConnectionCheck: ObservableObject {
         if let detail { steps[i].detail = detail }
     }
 
-    private func apply(_ report: PathReport?, to id: String) {
+    private func apply(_ report: PathReport?, to id: String, vpnOff: Bool = false) {
         guard let report else {
             update(id, .skipped, "No address configured.")
             return
@@ -171,7 +171,11 @@ final class ConnectionCheck: ObservableObject {
             update(id, .pass, "Site gateway answered in \(report.probe?.latencyMs ?? 0) ms.")
         } else {
             let tag = report.probe?.error?.technical ?? "No answer"
-            update(id, id == "lan" ? .warn : .fail, tag)
+            if vpnOff {
+                update(id, .warn, "LOJO VPN not connected — \(tag)")
+            } else {
+                update(id, id == "lan" ? .warn : .fail, tag)
+            }
         }
     }
 
