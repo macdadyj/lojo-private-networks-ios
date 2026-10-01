@@ -6,6 +6,47 @@ import LojoSSH
 
 // ssh-smoke --host A --port N --user U --ed25519 FILE --ecdsa FILE --fingerprint SHA256:… --known FILE
 // Runs the LojoSSH client against a real OpenSSH server. Prints PASS/FAIL per check.
+//
+// ssh-smoke probe HOST PORT [HOST PORT…]
+// What the app's diagnostics see before login: route, TCP connect time, banner, key exchange and
+// host key. The host key is always refused, so no authentication request is ever sent.
+
+if CommandLine.arguments.dropFirst().first == "probe" {
+    let rest = Array(CommandLine.arguments.dropFirst(2))
+    let policy = OverlayPolicy()
+    for i in stride(from: 0, to: rest.count - 1, by: 2) {
+        let host = rest[i]
+        guard let port = Int(rest[i + 1]) else { continue }
+        print("== \(host):\(port)")
+        switch policy.reach(address: host) {
+        case .overlay: print("   route    overlay 100.64.0.0/10")
+        case .routed(let r): print("   route    LOJO-routed \(r) (via the overlay connector)")
+        case .refused: print("   route    REFUSED by the overlay policy"); continue
+        }
+        let tcp = await SSHProbe.banner(address: host, port: port, timeout: .seconds(4))
+        if let ms = tcp.connectMillis { print("   tcp      connected in \(String(format: "%.1f", ms)) ms") }
+        if let banner = tcp.banner { print("   banner   \(banner)") }
+        if let error = tcp.error { print("   error    \(error.description)"); continue }
+        let seen = NIOLockedValueBox<HostKeyInfo?>(nil)
+        let start = ContinuousClock.now
+        do {
+            _ = try await SSHConnection.connect(
+                to: SSHTarget(address: host, port: port, username: "lojo-probe"), credentials: [],
+                verifyHostKey: { key in seen.withLockedValue { $0 = key }; return false }, connectTimeout: .seconds(4)
+            )
+            print("   UNEXPECTED: connected")
+        } catch {
+            let elapsed = ContinuousClock.now - start
+            if let key = seen.withLockedValue({ $0 }) {
+                print("   kex      ok in \(String(format: "%.0f", Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15)) ms")
+                print("   hostkey  \(key.type) \(key.fingerprint)")
+            } else {
+                print("   kex      failed: \(error)")
+            }
+        }
+    }
+    exit(0)
+}
 
 var args: [String: String] = [:]
 var it = CommandLine.arguments.dropFirst().makeIterator()
@@ -59,6 +100,8 @@ let target = SSHTarget(address: try policy.resolve(host), port: port, username: 
 let v1 = NIOLockedValueBox<KnownHosts.Verdict?>(nil)
 let conn = try await SSHConnection.connect(to: target, credentials: [.key(edKey.sshKey)], verifyHostKey: verifier(expect: expectFP, accepted: v1))
 check("first connect: host key unknown then trusted", v1.withLockedValue { $0 } == .unknown && conn.hostKey.fingerprint == expectFP, conn.hostKey.fingerprint)
+let edFP = HostKeyInfo(edKey.sshKey.publicKey).fingerprint
+check("reports the key the server accepted", conn.authenticatedWith == "key " + edFP, conn.authenticatedWith)
 
 let (out, status) = try await conn.exec("printf ok; id -un")
 check("exec returns stdout + exit 0", String(decoding: out, as: UTF8.self) == "ok" + user + "\n" && status.status == 0)
@@ -106,26 +149,61 @@ do {
 }
 known.withLockedValue { $0 = KnownHosts(parsing: (try? String(contentsOfFile: knownPath, encoding: .utf8)) ?? "") }
 
-// 4. key the server doesn't know: auth fails cleanly; password prompt not offered (server is key-only)
+// 4. key the server doesn't know: auth fails with the exact reason; no password prompt (server is key-only)
+let stranger = NIOSSHPrivateKey(ed25519Key: .init())
+let strangerFP = HostKeyInfo(stranger.publicKey).fingerprint
 let prompted = NIOLockedValueBox(false)
 do {
     _ = try await SSHConnection.connect(
-        to: target, credentials: [.key(NIOSSHPrivateKey(ed25519Key: .init()))],
+        to: target, credentials: [.key(stranger)],
         passwordPrompt: { prompted.withLockedValue { $0 = true }; return nil },
         verifyHostKey: verifier(expect: nil, accepted: .init(nil))
     )
     check("unknown user key rejected", false, "connected anyway")
 } catch let e as SSHClientError {
-    check("unknown user key rejected", e == .authenticationFailed && !prompted.withLockedValue { $0 }, e.description)
+    var ok = false
+    if case .authenticationFailed(let auth) = e {
+        ok = auth.rejectedKeys == [strangerFP] && auth.serverMethods == ["publickey"] && !prompted.withLockedValue { $0 }
+    }
+    check("unknown user key rejected, reason names the key and the server's methods", ok, e.description)
 }
 
-// 5. nothing listening: fast, typed failure
+// 4b. no credentials at all: the "none" probe still learns what the server accepts
+do {
+    _ = try await SSHConnection.connect(to: target, credentials: [], verifyHostKey: verifier(expect: nil, accepted: .init(nil)))
+    check("no credentials: denied", false, "connected anyway")
+} catch let e as SSHClientError {
+    var ok = false
+    if case .authenticationFailed(let auth) = e { ok = auth.serverMethods == ["publickey"] && auth.rejectedKeys.isEmpty }
+    check("no credentials: denied with the server's methods", ok, e.description)
+}
+
+// 4c. wrong user: same denial, names the user
+do {
+    _ = try await SSHConnection.connect(
+        to: SSHTarget(address: target.address, port: port, username: "nobody-lojo"), credentials: [.key(edKey.sshKey)],
+        verifyHostKey: verifier(expect: nil, accepted: .init(nil))
+    )
+    check("wrong user: denied", false, "connected anyway")
+} catch let e as SSHClientError {
+    check("wrong user: denied and names the user", e.isAuthFailure && e.description.contains("nobody-lojo"), e.description)
+}
+
+// 5. nothing listening: immediate "connection refused", not a timeout
+let refusedStart = ContinuousClock.now
 do {
     _ = try await SSHConnection.connect(to: SSHTarget(address: target.address, port: 1, username: user), credentials: [], verifyHostKey: { _ in false }, connectTimeout: .seconds(3))
-    check("closed port fails", false)
+    check("closed port: connection refused", false)
 } catch let e as SSHClientError {
-    if case .connectFailed = e { check("closed port fails", true, e.description) } else { check("closed port fails", false, e.description) }
+    let fast = ContinuousClock.now - refusedStart < .seconds(1)
+    check("closed port: connection refused, fast", e.description.contains("connection refused") && fast, e.description)
 }
+
+// 6. diagnostics probe: TCP time + banner; refused port reports refused
+let probe = await SSHProbe.banner(address: target.address, port: port)
+check("probe: connect time and OpenSSH banner", probe.connectMillis != nil && probe.banner?.hasPrefix("SSH-2.0-OpenSSH") == true, "\(String(format: "%.2f", probe.connectMillis ?? -1)) ms, \(probe.banner ?? "-")")
+let closed = await SSHProbe.banner(address: target.address, port: 1)
+check("probe: refused port", !closed.connected && closed.error?.description.contains("connection refused") == true, closed.error?.description ?? "-")
 
 print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -12,12 +12,18 @@ import NIOTransportServices
 public final class SSHConnection: Sendable {
     public let target: SSHTarget
     public let hostKey: HostKeyInfo
+    /// What the server accepted: "key SHA256:…", "password" or "none".
+    public let authenticatedWith: String
     private let channel: Channel
     private let firstError: NIOLockedValueBox<SSHClientError?>
 
-    private init(target: SSHTarget, hostKey: HostKeyInfo, channel: Channel, firstError: NIOLockedValueBox<SSHClientError?>) {
+    private init(
+        target: SSHTarget, hostKey: HostKeyInfo, authenticatedWith: String,
+        channel: Channel, firstError: NIOLockedValueBox<SSHClientError?>
+    ) {
         self.target = target
         self.hostKey = hostKey
+        self.authenticatedWith = authenticatedWith
         self.channel = channel
         self.firstError = firstError
     }
@@ -35,12 +41,13 @@ public final class SSHConnection: Sendable {
         let firstError = NIOLockedValueBox<SSHClientError?>(nil)
         let seenKey = NIOLockedValueBox<HostKeyInfo?>(nil)
         let authenticated = NIOLockedValueBox<EventLoopPromise<Void>?>(nil)
+        let trace = NIOLockedValueBox(AuthTrace(username: target.username))
 
         let initializer: @Sendable (Channel) -> EventLoopFuture<Void> = { channel in
             let done = channel.eventLoop.makePromise(of: Void.self)
             authenticated.withLockedValue { $0 = done }
             return channel.eventLoop.makeCompletedFuture {
-                let userAuth = UserAuth(username: target.username, credentials: credentials, passwordPrompt: passwordPrompt)
+                let userAuth = UserAuth(username: target.username, credentials: credentials, passwordPrompt: passwordPrompt, trace: trace)
                 let serverAuth = HostKeyGate(seen: seenKey, verify: verifyHostKey)
                 let ssh = NIOSSHHandler(
                     role: .client(.init(userAuthDelegate: userAuth, serverAuthDelegate: serverAuth)),
@@ -66,16 +73,29 @@ public final class SSHConnection: Sendable {
             try await done.futureResult.get()
         } catch {
             channel.close(promise: nil)
-            throw firstError.withLockedValue { $0 } ?? SSHClientError.wrap(error)
+            let failure = firstError.withLockedValue { $0 } ?? SSHClientError.wrap(error)
+            let current = trace.withLockedValue { $0 }
+            if case .disconnected = failure, current.started {
+                var auth = current.failure
+                auth.serverClosed = true
+                throw SSHClientError.authenticationFailed(auth)
+            }
+            throw failure
         }
         guard let key = seenKey.withLockedValue({ $0 }) else {
             channel.close(promise: nil)
             throw SSHClientError.hostKeyRejected
         }
-        return SSHConnection(target: target, hostKey: key, channel: channel, firstError: firstError)
+        let method: String
+        switch trace.withLockedValue({ $0.last }) {
+        case .key(let fingerprint)?: method = "key \(fingerprint)"
+        case .password?: method = "password"
+        case .none?, nil: method = "none"
+        }
+        return SSHConnection(target: target, hostKey: key, authenticatedWith: method, channel: channel, firstError: firstError)
     }
 
-    private static func bootstrap(
+    static func bootstrap(
         initializer: @escaping @Sendable (Channel) -> EventLoopFuture<Void>,
         timeout: TimeAmount
     ) -> NIOClientTCPBootstrap {
@@ -86,8 +106,11 @@ public final class SSHConnection: Sendable {
         tcp.keepaliveIdle = 30
         tcp.keepaliveInterval = 10
         tcp.keepaliveCount = 3
+        // With waitForActivity on (the default), a refused or unroutable connect just sits in
+        // NWConnection's .waiting state until the timeout and surfaces as "timed out".
         let ts = NIOTSConnectionBootstrap(group: NIOTSEventLoopGroup.singleton)
             .connectTimeout(timeout)
+            .channelOption(NIOTSChannelOptions.waitForActivity, value: false)
             .tcpOptions(tcp)
             .channelInitializer(initializer)
         return NIOClientTCPBootstrap(ts, tls: NIOInsecureNoTLS())
@@ -242,28 +265,73 @@ private final class Once: @unchecked Sendable {
     }
 }
 
+struct AuthTrace: Sendable {
+    enum Offer: Sendable { case none, key(String), password }
+
+    var started = false
+    var last: Offer?
+    var failure: AuthFailure
+
+    init(username: String) {
+        failure = AuthFailure(username: username)
+    }
+}
+
 private final class UserAuth: NIOSSHClientUserAuthenticationDelegate {
     private let username: String
     private var remaining: [SSHCredential]
     private let passwordPrompt: (@Sendable () async -> String?)?
     private var askedForPassword = false
+    private let trace: NIOLockedValueBox<AuthTrace>
 
-    init(username: String, credentials: [SSHCredential], passwordPrompt: (@Sendable () async -> String?)?) {
+    init(
+        username: String, credentials: [SSHCredential],
+        passwordPrompt: (@Sendable () async -> String?)?, trace: NIOLockedValueBox<AuthTrace>
+    ) {
         self.username = username
         self.remaining = credentials
         self.passwordPrompt = passwordPrompt
+        self.trace = trace
+        trace.withLockedValue { $0.failure.credentialCount = credentials.count }
     }
 
     func nextAuthenticationType(
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
+        // NIOSSH passes `.all` before the server has answered anything; a "none" request makes the
+        // server list the methods it really accepts, so keys are only offered where they can work.
+        let first = trace.withLockedValue { t -> Bool in
+            defer { t.started = true }
+            return !t.started
+        }
+        if first {
+            trace.withLockedValue { $0.last = AuthTrace.Offer.none }
+            nextChallengePromise.succeed(offer(.none))
+            return
+        }
+        trace.withLockedValue { t in
+            t.failure.serverMethods = Self.names(availableMethods)
+            switch t.last {
+            case .key(let fingerprint)?: t.failure.rejectedKeys.append(fingerprint)
+            case .password?: t.failure.passwordRejected = true
+            default: break
+            }
+            t.last = nil
+        }
         while !remaining.isEmpty {
             switch remaining.removeFirst() {
-            case .key(let key) where availableMethods.contains(.publicKey):
+            case .key(let key):
+                guard availableMethods.contains(.publicKey) else {
+                    trace.withLockedValue { $0.failure.skippedKeys += 1 }
+                    continue
+                }
+                let fingerprint = HostKeyInfo(key.publicKey).fingerprint
+                trace.withLockedValue { $0.last = .key(fingerprint) }
                 nextChallengePromise.succeed(offer(.privateKey(.init(privateKey: key))))
                 return
             case .password(let password) where availableMethods.contains(.password):
+                trace.withLockedValue { $0.last = .password }
                 nextChallengePromise.succeed(offer(.password(.init(password: password))))
                 return
             default:
@@ -273,16 +341,30 @@ private final class UserAuth: NIOSSHClientUserAuthenticationDelegate {
         if availableMethods.contains(.password), !askedForPassword, let prompt = passwordPrompt {
             askedForPassword = true
             let username = self.username
+            let trace = self.trace
             Task {
                 if let password = await prompt() {
+                    trace.withLockedValue { $0.last = .password }
                     nextChallengePromise.succeed(.init(username: username, serviceName: "ssh-connection", offer: .password(.init(password: password))))
                 } else {
-                    nextChallengePromise.fail(SSHClientError.authenticationFailed)
+                    let failure = trace.withLockedValue { t -> AuthFailure in
+                        t.failure.passwordCancelled = true
+                        return t.failure
+                    }
+                    nextChallengePromise.fail(SSHClientError.authenticationFailed(failure))
                 }
             }
             return
         }
-        nextChallengePromise.fail(SSHClientError.authenticationFailed)
+        nextChallengePromise.fail(SSHClientError.authenticationFailed(trace.withLockedValue { $0.failure }))
+    }
+
+    private static func names(_ methods: NIOSSHAvailableUserAuthenticationMethods) -> [String] {
+        var names: [String] = []
+        if methods.contains(.publicKey) { names.append("publickey") }
+        if methods.contains(.password) { names.append("password") }
+        if methods.contains(.hostBased) { names.append("hostbased") }
+        return names
     }
 
     private func offer(_ o: NIOSSHUserAuthenticationOffer.Offer) -> NIOSSHUserAuthenticationOffer {

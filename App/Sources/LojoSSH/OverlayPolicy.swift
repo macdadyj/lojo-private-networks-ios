@@ -52,9 +52,22 @@ public struct OverlayPolicy: Sendable, Equatable {
         self.routes = routes
     }
 
+    public enum Reach: Sendable, Equatable {
+        case overlay
+        /// A LOJO-routed LAN behind a Connexa connector, reached through the overlay.
+        case routed(IPv4Range)
+        case refused
+    }
+
+    public func reach(address: String) -> Reach {
+        guard let ip = IPv4Range.parse(address) else { return .refused }
+        if Self.overlay.contains(ip) { return .overlay }
+        if let route = routes.first(where: { $0.contains(ip) }) { return .routed(route) }
+        return .refused
+    }
+
     public func allows(address: String) -> Bool {
-        guard let ip = IPv4Range.parse(address) else { return false }
-        return Self.overlay.contains(ip) || routes.contains { $0.contains(ip) }
+        reach(address: address) != .refused
     }
 
     /// Returns an IPv4 literal the policy allows, resolving `*.lan` names; anything public is refused

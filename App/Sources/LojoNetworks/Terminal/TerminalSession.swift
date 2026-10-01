@@ -187,7 +187,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         if error is CancellationError || userClosed { return }
         if case .hostKeyChanged = phase { return }
         var text = Self.message(for: error)
-        if case .authenticationFailed? = error as? SSHClientError, center.keys.keys.isEmpty {
+        if (error as? SSHClientError)?.isAuthFailure == true, center.keys.keys.isEmpty {
             text += " There's no SSH key on this phone yet. Create one under Keys."
         }
         phase = .failed(text)
@@ -260,7 +260,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             } catch {
                 if error is CancellationError { return }
                 if case .hostKeyChanged = phase { return }
-                if let ssh = error as? SSHClientError, ssh == .authenticationFailed || ssh == .hostKeyRejected {
+                if let ssh = error as? SSHClientError, ssh.isAuthFailure || ssh == .hostKeyRejected {
                     failed(error)
                     return
                 }

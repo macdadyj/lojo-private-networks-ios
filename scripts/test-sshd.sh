@@ -6,11 +6,13 @@
 #   scripts/test-sshd.sh authorize 'ecdsa-sha2-nistp256 AAAA… comment'   add a public key (test server only)
 #   scripts/test-sshd.sh fingerprint                                     ed25519 host key fingerprint
 #   scripts/test-sshd.sh smoke                                           build + run tools/ssh-smoke against it
+#   scripts/test-sshd.sh probe HOST PORT [HOST PORT…]                    banner + host key of real devices, no login
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="$HOME/.cache/lojo-ssh-test"
-LISTEN="${LOJO_TEST_SSHD_LISTEN:-100.96.1.18:2222}"
+# 2222 is santa's real sshd; the test server stays off it.
+LISTEN="${LOJO_TEST_SSHD_LISTEN:-100.96.1.18:2322}"
 SSHD="$DIR/root/usr/sbin/sshd"
 
 setup() {
@@ -50,6 +52,13 @@ EOF
 
 running() { [[ -f "$DIR/sshd.pid" ]] && kill -0 "$(cat "$DIR/sshd.pid")" 2>/dev/null; }
 
+build_smoke() {
+  # shellcheck disable=SC1091
+  source "$HOME/.config/ios-dev/env"
+  export PATH="$SWIFT_ROOT/usr/bin:$HOME/.local/bin:$PATH"
+  (cd "$REPO/tools/ssh-smoke" && swift build -q --scratch-path "$HOME/.cache/lojo-ssh-smoke-build")
+}
+
 case "${1:-status}" in
   start)
     setup
@@ -81,15 +90,18 @@ case "${1:-status}" in
         cat "$DIR/smoke_$t.pub" >> "$DIR/authorized_keys"
       fi
     done
-    # shellcheck disable=SC1091
-    source "$HOME/.config/ios-dev/env"
-    export PATH="$SWIFT_ROOT/usr/bin:$HOME/.local/bin:$PATH"
-    (cd "$REPO/tools/ssh-smoke" && swift build -q --scratch-path "$HOME/.cache/lojo-ssh-smoke-build")
+    build_smoke
     rm -f "$DIR/known_hosts_smoke"
     "$HOME/.cache/lojo-ssh-smoke-build/debug/ssh-smoke" \
       --host "${LISTEN%:*}" --port "${LISTEN##*:}" --user "$USER" \
       --ed25519 "$DIR/smoke_ed25519" --ecdsa "$DIR/smoke_ecdsa" \
       --fingerprint "$("$0" fingerprint)" --known "$DIR/known_hosts_smoke"
     ;;
-  *) echo "usage: $0 start|stop|status|authorize KEY|fingerprint|smoke" >&2; exit 2 ;;
+  probe)
+    shift
+    [[ $# -ge 2 && $(( $# % 2 )) -eq 0 ]] || { echo "usage: $0 probe HOST PORT [HOST PORT…]" >&2; exit 2; }
+    build_smoke
+    "$HOME/.cache/lojo-ssh-smoke-build/debug/ssh-smoke" probe "$@"
+    ;;
+  *) echo "usage: $0 start|stop|status|authorize KEY|fingerprint|smoke|probe HOST PORT…" >&2; exit 2 ;;
 esac
