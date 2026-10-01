@@ -8,7 +8,10 @@ whether each online address answers on its SSH port. Nothing is written except a
   lojo-ssh-directory --json          JSON for the app (cached 120 s)
   lojo-ssh-directory --json --fresh  ignore the cache
 
-extra.json: [{"name": "shop-pi", "address": "192.168.7.x", "group": "Pis", "user": "pi", "port": 22}]
+extra.json: [{"name": "shop-pi", "address": "192.168.7.x", "group": "Pis", "user": "pi", "port": 22},
+             {"address": "100.96.x.x", "port": 2222, "user": "jon"}]
+An entry whose address is already a Connexa device or connector overrides its name, group, user
+and port (e.g. an sshd that isn't on 22) instead of adding a second row.
 """
 import ipaddress
 import json
@@ -80,8 +83,17 @@ def build():
     if os.path.exists(EXTRA):
         with open(EXTRA, encoding="utf-8") as f:
             for x in json.load(f):
+                known = next((e for e in entries if e["address"] == x["address"]), None)
+                if known:
+                    # Same address as a Connexa device or connector: only override how to log in.
+                    for key in ("name", "group", "user"):
+                        if x.get(key):
+                            known[key] = x[key]
+                    if "port" in x:
+                        known["port"] = int(x["port"])
+                    continue
                 entries.append({
-                    "name": x["name"], "address": x["address"], "kind": "routed",
+                    "name": x.get("name") or x["address"], "address": x["address"], "kind": "routed",
                     "group": x.get("group", "Routed hosts"), "user": x.get("user"),
                     "port": int(x.get("port", 22)), "online": True,
                 })
