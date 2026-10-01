@@ -84,9 +84,12 @@ project is closer to market. See [`docs/tls.md`](docs/tls.md#legacy-fallback-lab
 
 `deploy-phone.sh` rsyncs `App/` into the **ext4** build dir `~/.local/share/ios-dev/apps/LojoNetworks`
 (it refuses non-ext4). It exports `XTL_TMPDIR=~/.cache/xtool-tmp` through the env file, runs
-`xtool dev run -c debug|release --usb --udid <UDID>` (the UDID is read from USB at run time, or from
-`LOJO_UDID`, and is never stored in the repo), then launches the app with
-`pymobiledevice3 developer core-device launch-application --userspace`. Always edit in the repo;
+`xtool dev run -c debug|release --usb --udid <UDID>`, then launches the app with
+`pymobiledevice3 developer core-device launch-application --userspace`. The UDID comes from
+`scripts/phone-udid.sh`, which reads USB at run time and accepts only the **iPhone 11** (ProductType
+`iPhone12,1`; `LOJO_PHONE_MODEL` overrides). It refuses if none or several match, and `LOJO_UDID` must
+also be that model, so another phone on the hub is never installed to. The UDID is never printed or
+stored in the repo. Always edit in the repo;
 the build dir is disposable. Signing on NTFS (`LOJODESKDRIVE`) fails with `0xe8008017`.
 
 `ld64.lld: warning: This version of lld does not support linking for platform iOS` is expected.
@@ -210,7 +213,8 @@ scripts/phone-shot.sh OUT.png [KEY=VALUE ...]    # launches (kills existing) the
 |---|---|
 | `LOJO_DEMO` | `1` demo network, `0` live gateway (persisted) |
 | `LOJO_SCREEN` | `home`, `detail`, `activity`, `map`, `check`, `onboarding`, `setup`, `settings`, `terminal` |
-| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `settings`, `edit` (the gateway host) |
+| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `key` (the Secure Enclave key with Copy authorize command), `settings`, `edit`, `diag` (diagnostics) |
+| `LOJO_SSH_HOST` | host label for `edit` and `diag` (default `gateway`) |
 | `LOJO_SSH_CONNECT` | with `terminal`: host label to open a session to (`gateway` = the seeded site gateway) |
 | `LOJO_SSH_REDACT` | `1` masks IP addresses in the Terminal tab (use for every screenshot) |
 | `LOJO_SSH_REFRESH` | `1` pulls the gateway device list at launch even if the cached one is fresh |
@@ -329,7 +333,7 @@ drawn site plan; the live map is deliberately not captured because live position
 | `18-tls-refused.png` / `19-tls-refused-diagnostics.png` | A different CA answering: "Secure connection refused", `TLS pin mismatch` with the presented root |
 | `20-home-unpaired.png` | Not paired: **Unencrypted (legacy HTTP)** label |
 
-Terminal tab (all with `LOJO_SSH_REDACT=1`; live shells are against the temporary test server on santa, see [`docs/ssh-terminal.md`](docs/ssh-terminal.md) §8):
+Terminal tab (all with `LOJO_SSH_REDACT=1`; 01–12 live shells are against the temporary test server on santa, 13–18 against the real devices before the phone's key was authorized, see [`docs/ssh-terminal.md`](docs/ssh-terminal.md) §8):
 
 | File | Screen |
 |---|---|
@@ -345,6 +349,12 @@ Terminal tab (all with `LOJO_SSH_REDACT=1`; live shells are against the temporar
 | `ssh-10-reconnected.png` | Server dropped the connection; automatic reconnect with a banner |
 | `ssh-11-exit.png` | Clean `exit`: "Session ended (exit 0)", no auto-reconnect |
 | `ssh-12-host-key-changed.png` | Changed host key: connection refused, saved and offered fingerprints |
+| `ssh-13-hosts-seeded.png` | Known devices seeded with their user and port: santacomputa `jon`:2222, labMachine, Vision Pi `pi`, BlueBox |
+| `ssh-14-diag-host-key.png` | Diagnostics on santa's real sshd: VPN, route, TCP time, banner, first-use host key with Trust |
+| `ssh-15-diag-login-denied.png` | Diagnostics after trusting: login denied with the exact reason (phone key not in `authorized_keys`) |
+| `ssh-16-diag-connector-route.png` | BlueBox on `192.168.7.0/24`, reached through the overlay connector |
+| `ssh-17-key-authorize.png` | Key detail: Copy authorize command, Copy and Share public key |
+| `ssh-18-session-login-denied.png` | Session to santa denied: exact reason, Copy authorize command, Diagnose |
 
 ## Hard rules (from `~/CURSOR_ONBOARDING.md`)
 
