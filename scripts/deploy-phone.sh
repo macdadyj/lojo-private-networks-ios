@@ -32,12 +32,14 @@ source "$HOME/.config/ios-dev/env"
 export PATH="$SWIFT_ROOT/usr/bin:$HOME/.local/bin:$PATH"
 mkdir -p "$XTL_TMPDIR"
 
-# The phone's UDID is a device identifier: read it from USB at run time, never commit it.
-UDID="${LOJO_UDID:-$(pymobiledevice3 usbmux list --usb 2>/dev/null \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["Identifier"] if d else "")')}"
-if [[ -z "$UDID" && "$BUILD_ONLY" == 0 ]]; then
-  echo "No iPhone on USB. Plug it in, unlock it and tap Trust." >&2
-  exit 1
+# Only the iPhone 11 (scripts/phone-udid.sh picks it by model; LOJO_UDID must also be one).
+UDID=""
+if [[ "$BUILD_ONLY" == 0 ]]; then
+  UDID="$("$REPO/scripts/phone-udid.sh")" || {
+    echo "Plug in the iPhone 11, unlock it and tap Trust (LOJO_PHONE_MODEL overrides the model)." >&2
+    exit 1
+  }
+  export PYMOBILEDEVICE3_UDID="$UDID"
 fi
 # Two installs over one USB link corrupt each other; another checkout may be deploying.
 if [[ "$BUILD_ONLY" == 0 ]] && pgrep -f 'xtool.* dev run' >/dev/null; then

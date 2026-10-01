@@ -14,6 +14,10 @@ WAIT="${LOJO_SHOT_WAIT:-6}"
 args=()
 for kv in "$@"; do args+=(--env "$kv"); done
 
+# Same phone as deploy-phone.sh; the userspace tunnel reads the target from this variable.
+PYMOBILEDEVICE3_UDID="$("$(dirname "$0")/phone-udid.sh")"
+export PYMOBILEDEVICE3_UDID
+
 pymobiledevice3 developer core-device launch-application --userspace --kill-existing \
   "${args[@]}" "$BUNDLE" '' >/dev/null
 sleep "$WAIT"
