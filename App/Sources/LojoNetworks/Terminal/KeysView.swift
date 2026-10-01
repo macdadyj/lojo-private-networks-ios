@@ -15,9 +15,7 @@ struct KeysView: View {
             if !keys.keys.isEmpty {
                 Section {
                     ForEach(keys.keys) { record in
-                        NavigationLink {
-                            KeyDetailView(record: record)
-                        } label: {
+                        NavigationLink(value: TerminalRoute.key(record.id)) {
                             KeyRow(record: record)
                         }
                         .swipeActions {
@@ -27,7 +25,7 @@ struct KeysView: View {
                 } header: {
                     Text("On this iPhone")
                 } footer: {
-                    Text("Add a key's public half to ~/.ssh/authorized_keys on each device you want to reach. The private half never leaves this iPhone.")
+                    Text("Open a key to copy a one-line command that adds it to ~/.ssh/authorized_keys on a device. The private half never leaves this iPhone.")
                 }
             }
             Section {
@@ -126,26 +124,15 @@ private struct KeyRow: View {
     }
 }
 
-private struct KeyDetailView: View {
+struct KeyDetailView: View {
     let record: SSHKeyRecord
-    @State private var copied = false
 
     var body: some View {
         List {
-            Section("Public key") {
-                Text(record.publicKey)
-                    .font(.footnote.monospaced())
-                    .textSelection(.enabled)
-                Button {
-                    UIPasteboard.general.string = record.publicKey
-                    copied = true
-                    Haptics.success()
-                } label: {
-                    Label(copied ? "Copied" : "Copy public key", systemImage: copied ? "checkmark" : "doc.on.doc")
-                }
-                ShareLink(item: record.publicKey) {
-                    Label("Share public key", systemImage: "square.and.arrow.up")
-                }
+            Section {
+                AuthorizeKeyControls(record: record)
+            } header: {
+                Text("Public key")
             }
             Section {
                 LabeledContent("Type", value: record.kind.title)
@@ -153,11 +140,6 @@ private struct KeyDetailView: View {
                     Text(record.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
                 }
                 LabeledContent("Created", value: record.created.formatted(date: .abbreviated, time: .shortened))
-            }
-            Section {
-                Text("On the device, append the line above to `~/.ssh/authorized_keys` of the user you log in as. The file should be mode 600 and `~/.ssh` mode 700.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
         .navigationTitle(record.label)

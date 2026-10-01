@@ -325,6 +325,12 @@ private struct EndedCard: View {
     let icon: String
     let tint: Color
     let text: String
+    @State private var diagnosing = false
+    @State private var copied = false
+
+    private var authorizeKey: SSHKeyRecord? {
+        session.failure?.isAuthFailure == true ? center.authorizeKey(for: session.host) : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -332,6 +338,25 @@ private struct EndedCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(tint)
                 .fixedSize(horizontal: false, vertical: true)
+            if let record = authorizeKey {
+                Button {
+                    UIPasteboard.general.string = AuthorizeCommand.text(publicKey: record.publicKey)
+                    copied = true
+                    Haptics.success()
+                } label: {
+                    Label(copied ? "Copied — run it on \(session.host.label) as \(session.host.username)" : "Copy authorize command",
+                          systemImage: copied ? "checkmark" : "terminal")
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+            if session.failure != nil {
+                Button {
+                    diagnosing = true
+                } label: {
+                    Label("Diagnose this host", systemImage: "stethoscope")
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
             HStack {
                 Button("Close") { center.close(session) }
                     .buttonStyle(SecondaryButtonStyle())
@@ -343,6 +368,10 @@ private struct EndedCard: View {
         .padding(16)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(uiColor: .secondarySystemBackground)))
         .padding(.horizontal, 16)
+        .sheet(isPresented: $diagnosing) {
+            DiagnosticsView(host: center.hosts.hosts.first { $0.id == session.host.id } ?? session.host, center: center)
+                .environmentObject(center)
+        }
     }
 }
 

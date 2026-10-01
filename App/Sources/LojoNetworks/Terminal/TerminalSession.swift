@@ -34,6 +34,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     let id = UUID()
     let host: SSHHost
     @Published private(set) var phase: Phase = .connecting
+    /// Why the last attempt failed, for the failure card's actions.
+    @Published private(set) var failure: SSHClientError?
     /// xterm title set by the remote shell; may contain the remote hostname.
     @Published private(set) var remoteTitle = ""
     /// Text a remote program asked to put on the clipboard (OSC 52), waiting for the owner's OK.
@@ -80,6 +82,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         userClosed = false
         runTask?.cancel()
         teardown()
+        failure = nil
         phase = .connecting
         runTask = Task { [weak self] in
             guard let self else { return }
@@ -187,9 +190,12 @@ final class TerminalSession: ObservableObject, Identifiable {
         if error is CancellationError || userClosed { return }
         if case .hostKeyChanged = phase { return }
         var text = Self.message(for: error)
-        if (error as? SSHClientError)?.isAuthFailure == true, center.keys.keys.isEmpty {
-            text += " There's no SSH key on this phone yet. Create one under Keys."
+        if (error as? SSHClientError)?.isAuthFailure == true {
+            text += center.keys.keys.isEmpty
+                ? " Create a key under Keys, then add it on the host."
+                : " Add this iPhone's public key on the host: copy the authorize command below and run it there."
         }
+        failure = error as? SSHClientError
         phase = .failed(text)
         _ = terminalView.resignFirstResponder()
         Haptics.error()

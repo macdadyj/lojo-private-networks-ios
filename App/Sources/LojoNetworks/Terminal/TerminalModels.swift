@@ -15,6 +15,51 @@ struct SSHHost: Codable, Identifiable, Hashable, Sendable {
     var endpoint: String { port == 22 ? address : "\(address):\(port)" }
 }
 
+/// Login user and port for the LOJO devices we know, keyed by address. Seeded as hosts on first
+/// launch and used whenever a device is saved from the gateway list.
+struct HostDefaults: Sendable, Hashable {
+    var label: String
+    var address: String
+    var username: String
+    var port: Int
+    var group: String
+
+    static let known: [HostDefaults] = [
+        HostDefaults(label: "santacomputa", address: "100.96.1.18", username: "jon", port: 2222, group: "Gateway"),
+        HostDefaults(label: "labMachine", address: "100.96.1.90", username: "jon", port: 22, group: "Lab"),
+        HostDefaults(label: "Vision Pi", address: "100.96.1.115", username: "pi", port: 22, group: "Pis"),
+        HostDefaults(label: "BlueBox", address: "192.168.7.42", username: "jon", port: 22, group: "Shop LAN"),
+    ]
+
+    static func match(address: String) -> HostDefaults? {
+        known.first { $0.address == address }
+    }
+
+    /// User for a gateway-list device: the known default, then the gateway's hint, then a guess.
+    static func username(for entry: DirectoryEntry) -> String {
+        if let known = match(address: entry.address) { return known.username }
+        if let user = entry.user, !user.isEmpty { return user }
+        let name = entry.name.lowercased()
+        return name.contains("pi") || name.contains("vision") ? "pi" : "jon"
+    }
+
+    static func port(for entry: DirectoryEntry) -> Int {
+        match(address: entry.address)?.port ?? entry.port
+    }
+}
+
+/// One-line shell command that appends a public key to the login user's authorized_keys, once.
+enum AuthorizeCommand {
+    static func text(publicKey: String) -> String {
+        let key = quoted(publicKey.trimmingCharacters(in: .whitespacesAndNewlines))
+        return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF \(key) ~/.ssh/authorized_keys 2>/dev/null || echo \(key) >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys"
+    }
+
+    private static func quoted(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 /// One row of `lojo-ssh-directory --json` from the gateway.
 struct DirectoryEntry: Codable, Identifiable, Hashable, Sendable {
     var name: String

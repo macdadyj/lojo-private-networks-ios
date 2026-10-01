@@ -12,6 +12,7 @@ struct HostEditorView: View {
     @State private var confirmDelete = false
     @State private var hasPassword: Bool
     @State private var revealAddress = false
+    @State private var diagnosing = false
     private let isNew: Bool
 
     init(draft: HostDraft) {
@@ -99,6 +100,15 @@ struct HostEditorView: View {
                 }
 
                 if !isNew {
+                    Section {
+                        Button {
+                            diagnosing = true
+                        } label: {
+                            Label("Run diagnostics", systemImage: "stethoscope")
+                        }
+                    } footer: {
+                        Text("Checks the VPN, route, port, SSH banner, host key and login one by one, and says exactly what failed.")
+                    }
                     hostKeySection
                     Section {
                         Button("Delete host", role: .destructive) { confirmDelete = true }
@@ -131,6 +141,16 @@ struct HostEditorView: View {
                 }
             }
             .onAppear { hasPassword = keys.password(hostID: host.id) != nil }
+            .onChange(of: host.address) { _, _ in
+                guard isNew, let known = HostDefaults.match(address: trimmedAddress) else { return }
+                portText = String(known.port)
+                host.username = known.username
+                if host.label.isEmpty { host.label = known.label }
+            }
+            .sheet(isPresented: $diagnosing) {
+                DiagnosticsView(host: hosts.hosts.first { $0.id == host.id } ?? host, center: center)
+                    .environmentObject(center)
+            }
         }
     }
 

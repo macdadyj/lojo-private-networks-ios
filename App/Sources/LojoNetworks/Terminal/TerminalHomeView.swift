@@ -3,6 +3,7 @@ import SwiftUI
 
 enum TerminalRoute: Hashable {
     case keys
+    case key(String)
 }
 
 struct TerminalHomeView: View {
@@ -14,6 +15,7 @@ struct TerminalHomeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var path: [TerminalRoute] = []
     @State private var editing: HostDraft?
+    @State private var diagnosing: SSHHost?
     @State private var showSettings = false
 
     var body: some View {
@@ -35,11 +37,15 @@ struct TerminalHomeView: View {
                 ForEach(hosts.groups, id: \.name) { group in
                     Section(group.name) {
                         ForEach(group.hosts) { host in
-                            HostRow(host: host, onEdit: { editing = HostDraft(host: host, isNew: false) })
+                            HostRow(
+                                host: host,
+                                onEdit: { editing = HostDraft(host: host, isNew: false) },
+                                onDiagnose: { diagnosing = host }
+                            )
                         }
                     }
                 }
-                GatewayDevicesSection()
+                GatewayDevicesSection(onDiagnose: { diagnosing = $0 })
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Terminal")
@@ -67,6 +73,10 @@ struct TerminalHomeView: View {
             .navigationDestination(for: TerminalRoute.self) { route in
                 switch route {
                 case .keys: KeysView()
+                case .key(let id):
+                    if let record = keys.keys.first(where: { $0.id == id }) {
+                        KeyDetailView(record: record)
+                    }
                 }
             }
             .refreshable { await center.refreshDirectory() }
@@ -76,6 +86,10 @@ struct TerminalHomeView: View {
                 .environmentObject(center)
                 .environmentObject(hosts)
                 .environmentObject(keys)
+        }
+        .sheet(item: $diagnosing) { host in
+            DiagnosticsView(host: host, center: center)
+                .environmentObject(center)
         }
         .sheet(isPresented: $showSettings) {
             TerminalSettingsView()
@@ -125,7 +139,7 @@ struct TerminalHomeView: View {
     }
 
     private func appear() {
-        hosts.seedGateway(overlayGatewayURL: store.launch.overlayOverride ?? store.overlayAddress, port: center.launch.gatewayPort)
+        hosts.seedDefaults(overlayGatewayURL: store.launch.overlayOverride ?? store.overlayAddress, gatewayPort: center.launch.gatewayPort)
         if center.canRefreshDirectory, center.directoryIsStale || (center.launch.refresh && !center.launchApplied) {
             Task { await center.refreshDirectory() }
         }
@@ -141,8 +155,12 @@ struct TerminalHomeView: View {
         }
         switch launch.screen {
         case .keys: path = [.keys]
+        case .key:
+            let record = keys.keys.first { $0.kind == .secureEnclaveP256 } ?? keys.keys.first
+            path = [.keys] + (record.map { [TerminalRoute.key($0.id)] } ?? [])
         case .settings: showSettings = true
-        case .edit: editing = hosts.gateway.map { HostDraft(host: $0, isNew: false) }
+        case .edit: editing = center.launchHost().map { HostDraft(host: $0, isNew: false) }
+        case .diag: diagnosing = center.launchHost()
         case .hosts, nil: break
         }
         for wanted in (launch.connect ?? "").lowercased().split(separator: ",").map(String.init) {
@@ -189,6 +207,7 @@ private struct HostRow: View {
     @EnvironmentObject private var hosts: HostStore
     let host: SSHHost
     let onEdit: () -> Void
+    let onDiagnose: () -> Void
 
     private var trusted: Bool { !hosts.savedHostKeys(for: host).isEmpty }
 
@@ -204,7 +223,7 @@ private struct HostRow: View {
                     .background(RoundedRectangle(cornerRadius: 9).fill(host.isGateway ? LojoTheme.accentDeep : LojoTheme.accent))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(host.label).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact))\(host.port == 22 ? "" : ":\(host.port)")")
+                    Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact)):\(host.port)")
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
@@ -219,9 +238,11 @@ private struct HostRow: View {
         .disabled(center.vpnAddress == nil)
         .swipeActions {
             Button("Edit", action: onEdit).tint(LojoTheme.accentDeep)
+            Button("Diagnose", action: onDiagnose).tint(LojoTheme.warning)
         }
         .contextMenu {
             Button("Connect", systemImage: "terminal") { center.open(host) }
+            Button("Diagnose", systemImage: "stethoscope", action: onDiagnose)
             Button("Edit", systemImage: "pencil", action: onEdit)
         }
     }
@@ -231,6 +252,7 @@ private struct GatewayDevicesSection: View {
     @EnvironmentObject private var center: TerminalCenter
     @EnvironmentObject private var hosts: HostStore
     @State private var showOffline = false
+    let onDiagnose: (SSHHost) -> Void
 
     private var online: [DirectoryEntry] {
         (hosts.directory?.devices ?? []).filter(\.online).sorted { a, b in
@@ -257,12 +279,12 @@ private struct GatewayDevicesSection: View {
             }
             if hosts.directory != nil {
                 ForEach(online) { entry in
-                    DirectoryRow(entry: entry)
+                    DirectoryRow(entry: entry, onDiagnose: onDiagnose)
                 }
                 if !offline.isEmpty {
                     if showOffline {
                         ForEach(offline) { entry in
-                            DirectoryRow(entry: entry)
+                            DirectoryRow(entry: entry, onDiagnose: onDiagnose)
                         }
                     }
                     Button(showOffline ? "Hide offline devices" : "Show \(offline.count) offline devices") {
@@ -271,7 +293,7 @@ private struct GatewayDevicesSection: View {
                     .font(.subheadline)
                 }
             } else if center.directoryState == .idle {
-                Text("Pull the list of LOJO devices from the site gateway over SSH. You can save any of them as a host with one tap.")
+                Text("Pull the list of LOJO devices from the site gateway over SSH (this iPhone's key must be authorized on the gateway). Tap a device to connect.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -289,7 +311,7 @@ private struct GatewayDevicesSection: View {
         } footer: {
             if let generated = hosts.directory?.generatedAt,
                let date = ISO8601DateFormatter().date(from: generated) {
-                Text("Updated \(RelativeTime.text(date)). Only devices on the overlay or LOJO-routed subnets are listed.")
+                Text("Updated \(RelativeTime.text(date)). Only devices on the overlay or LOJO-routed subnets are listed. Tap one to connect; it's saved with its usual user and port.")
             }
         }
     }
@@ -299,30 +321,42 @@ private struct DirectoryRow: View {
     @EnvironmentObject private var center: TerminalCenter
     @EnvironmentObject private var hosts: HostStore
     let entry: DirectoryEntry
+    let onDiagnose: (SSHHost) -> Void
+
+    private var isThisPhone: Bool { entry.address == center.vpnAddress }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Circle().fill(entry.online ? LojoTheme.online : Color.secondary.opacity(0.5)).frame(width: 9, height: 9)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.name).font(.body.weight(.medium))
-                Text("\(AddressDisplay.text(entry.address, redact: center.redact)) · \(entry.group) · \(entry.sshOpen ? "SSH open" : "no SSH")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if entry.address == center.vpnAddress {
-                Text("This iPhone").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            } else if hosts.isSaved(entry) {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(LojoTheme.online)
-                    .accessibilityLabel("Saved")
-            } else {
-                Button("Save") {
-                    hosts.save(entry)
-                    Haptics.success()
+        Button {
+            center.open(entry)
+        } label: {
+            HStack(spacing: 12) {
+                Circle().fill(entry.online ? LojoTheme.online : Color.secondary.opacity(0.5)).frame(width: 9, height: 9)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.name).font(.body.weight(.medium)).foregroundStyle(.primary)
+                    Text("\(HostDefaults.username(for: entry))@\(AddressDisplay.text(entry.address, redact: center.redact)):\(HostDefaults.port(for: entry)) · \(entry.group)\(entry.sshOpen ? "" : " · SSH not seen")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!entry.sshOpen)
+                Spacer()
+                if isThisPhone {
+                    Text("This iPhone").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                } else if hosts.isSaved(entry) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(LojoTheme.online)
+                        .accessibilityLabel("Saved")
+                }
+            }
+        }
+        .disabled(isThisPhone || center.vpnAddress == nil)
+        .contextMenu {
+            if !isThisPhone {
+                Button("Connect", systemImage: "terminal") { center.open(entry) }
+                Button("Diagnose", systemImage: "stethoscope") { onDiagnose(hosts.save(entry)) }
+                if !hosts.isSaved(entry) {
+                    Button("Save as host", systemImage: "plus") {
+                        hosts.save(entry)
+                        Haptics.success()
+                    }
+                }
             }
         }
     }

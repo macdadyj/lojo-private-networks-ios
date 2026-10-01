@@ -6,10 +6,12 @@ import LojoSSH
 /// shell or trust a host key, so release builds ignore them.
 struct TerminalLaunch: Sendable {
     enum Screen: String, Sendable {
-        case hosts, keys, settings, edit
+        case hosts, keys, key, settings, edit, diag
     }
 
     var screen: Screen?
+    /// Host label for `edit` and `diag` ("gateway" is the seeded gateway host; default gateway).
+    var host: String?
     /// Comma-separated host labels to open sessions to at launch ("gateway" is the seeded gateway host).
     var connect: String?
     var redact = false
@@ -36,6 +38,7 @@ struct TerminalLaunch: Sendable {
         }
         var launch = TerminalLaunch(
             screen: text("LOJO_SSH_SCREEN").flatMap { Screen(rawValue: $0.lowercased()) },
+            host: text("LOJO_SSH_HOST"),
             connect: text("LOJO_SSH_CONNECT"),
             redact: flag("LOJO_SSH_REDACT"),
             refresh: flag("LOJO_SSH_REFRESH")
@@ -143,6 +146,22 @@ final class TerminalCenter: ObservableObject {
     func show(_ session: TerminalSession) {
         selectedID = session.id
         showingSession = true
+    }
+
+    /// Opens a gateway-list device, saving it first with its default user and port.
+    func open(_ entry: DirectoryEntry) {
+        open(hosts.save(entry))
+    }
+
+    /// The key to put in a host's authorized_keys: its chosen key, else a Secure Enclave key, else any.
+    func authorizeKey(for host: SSHHost) -> SSHKeyRecord? {
+        if let id = host.keyID, let chosen = keys.keys.first(where: { $0.id == id }) { return chosen }
+        return keys.keys.first { $0.kind == .secureEnclaveP256 } ?? keys.keys.first
+    }
+
+    func launchHost() -> SSHHost? {
+        guard let wanted = launch.host?.lowercased(), wanted != "gateway" else { return hosts.gateway }
+        return hosts.hosts.first { $0.label.lowercased() == wanted }
     }
 
     /// The host's chosen key (or every key on the phone), then its saved password if any.

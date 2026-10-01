@@ -47,22 +47,51 @@ final class HostStore: ObservableObject {
             }
     }
 
+    /// LOJO's own routed subnets plus whatever the gateway reports; a stale or partial device list
+    /// must not make a connector-routed LAN unreachable.
     var policy: OverlayPolicy {
-        let routes = directory?.routes.compactMap(IPv4Range.init(cidr:)) ?? []
-        return OverlayPolicy(routes: routes.isEmpty ? OverlayPolicy.defaultRoutes : routes)
+        var routes = OverlayPolicy.defaultRoutes
+        for route in directory?.routes.compactMap(IPv4Range.init(cidr:)) ?? [] where !routes.contains(route) {
+            routes.append(route)
+        }
+        return OverlayPolicy(routes: routes)
     }
 
-    /// The gateway the app already talks to is the first SSH host.
-    func seedGateway(overlayGatewayURL: String, port: Int?) {
-        guard let host = URL(string: overlayGatewayURL)?.host, OverlayPolicy().allows(address: host) else { return }
-        if var gw = gateway {
-            if let port, gw.port != port {
-                gw.port = port
-                upsert(gw)
-            }
-            return
+    private static let seedVersionKey = "lojo.ssh.seededDefaults"
+    private static let seedVersion = 1
+
+    /// The gateway the app already talks to is the first SSH host. Once per seed version, the known
+    /// LOJO devices are added and saved hosts at those addresses get their default user and port
+    /// (builds before version 1 saved the gateway on 22 and guessed users).
+    func seedDefaults(overlayGatewayURL: String, gatewayPort: Int?) {
+        if gateway == nil, let address = URL(string: overlayGatewayURL)?.host, OverlayPolicy().allows(address: address) {
+            let known = HostDefaults.match(address: address)
+            upsert(SSHHost(
+                label: known?.label ?? "Site gateway", address: address, port: known?.port ?? 22,
+                username: known?.username ?? "jon", group: "Gateway", isGateway: true
+            ))
         }
-        upsert(SSHHost(label: "Site gateway", address: host, port: port ?? 22, username: "jon", group: "Gateway", isGateway: true))
+        let defaults = UserDefaults.standard
+        if defaults.integer(forKey: Self.seedVersionKey) < Self.seedVersion {
+            for known in HostDefaults.known {
+                let matches = hosts.indices.filter { hosts[$0].address == known.address }
+                if matches.isEmpty {
+                    guard gateway?.address != known.address else { continue }
+                    hosts.append(SSHHost(label: known.label, address: known.address, port: known.port, username: known.username, group: known.group))
+                }
+                for i in matches {
+                    hosts[i].port = known.port
+                    hosts[i].username = known.username
+                    if hosts[i].label == "Site gateway" { hosts[i].label = known.label }
+                }
+            }
+            persistHosts()
+            defaults.set(Self.seedVersion, forKey: Self.seedVersionKey)
+        }
+        if let gatewayPort, var gw = gateway, gw.port != gatewayPort {
+            gw.port = gatewayPort
+            upsert(gw)
+        }
     }
 
     func upsert(_ host: SSHHost) {
@@ -79,17 +108,21 @@ final class HostStore: ObservableObject {
         persistHosts()
     }
 
+    func saved(_ entry: DirectoryEntry) -> SSHHost? {
+        let port = HostDefaults.port(for: entry)
+        return hosts.first { $0.address == entry.address && ($0.port == port || $0.port == entry.port) }
+    }
+
     func isSaved(_ entry: DirectoryEntry) -> Bool {
-        hosts.contains { $0.address == entry.address && $0.port == entry.port }
+        saved(entry) != nil
     }
 
     @discardableResult
     func save(_ entry: DirectoryEntry) -> SSHHost {
-        if let existing = hosts.first(where: { $0.address == entry.address && $0.port == entry.port }) { return existing }
+        if let existing = saved(entry) { return existing }
         let host = SSHHost(
-            label: entry.name, address: entry.address, port: entry.port,
-            username: entry.user ?? (entry.name.lowercased().contains("pi") || entry.name.lowercased().contains("vision") ? "pi" : "jon"),
-            group: entry.group
+            label: entry.name, address: entry.address, port: HostDefaults.port(for: entry),
+            username: HostDefaults.username(for: entry), group: entry.group
         )
         upsert(host)
         return host
