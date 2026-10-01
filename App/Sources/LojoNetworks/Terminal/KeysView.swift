@@ -136,8 +136,10 @@ struct KeyDetailView: View {
             }
             Section {
                 LabeledContent("Type", value: record.kind.title)
-                LabeledContent("Fingerprint") {
-                    Text(record.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Fingerprint")
+                    FingerprintText(fingerprint: record.fingerprint)
+                        .foregroundStyle(.secondary)
                 }
                 LabeledContent("Created", value: record.created.formatted(date: .abbreviated, time: .shortened))
             }

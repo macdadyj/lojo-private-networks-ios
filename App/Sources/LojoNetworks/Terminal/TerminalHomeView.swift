@@ -223,7 +223,7 @@ private struct HostRow: View {
                     .background(RoundedRectangle(cornerRadius: 9).fill(host.isGateway ? LojoTheme.accentDeep : LojoTheme.accent))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(host.label).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact)):\(host.port)")
+                    Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact)):\(String(host.port))")
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
@@ -333,7 +333,7 @@ private struct DirectoryRow: View {
                 Circle().fill(entry.online ? LojoTheme.online : Color.secondary.opacity(0.5)).frame(width: 9, height: 9)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.name).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text("\(HostDefaults.username(for: entry))@\(AddressDisplay.text(entry.address, redact: center.redact)):\(HostDefaults.port(for: entry)) · \(entry.group)\(entry.sshOpen ? "" : " · SSH not seen")")
+                    Text("\(HostDefaults.username(for: entry))@\(AddressDisplay.text(entry.address, redact: center.redact)):\(String(HostDefaults.port(for: entry))) · \(entry.group)\(entry.sshOpen ? "" : " · SSH not seen")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

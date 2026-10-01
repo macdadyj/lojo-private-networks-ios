@@ -192,8 +192,8 @@ final class TerminalSession: ObservableObject, Identifiable {
         var text = Self.message(for: error)
         if (error as? SSHClientError)?.isAuthFailure == true {
             text += center.keys.keys.isEmpty
-                ? " Create a key under Keys, then add it on the host."
-                : " Add this iPhone's public key on the host: copy the authorize command below and run it there."
+                ? ". Create a key under Keys, then add it on the host."
+                : ". Add this iPhone's public key on the host: copy the authorize command below and run it there."
         }
         failure = error as? SSHClientError
         phase = .failed(text)

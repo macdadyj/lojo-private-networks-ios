@@ -174,6 +174,12 @@ final class HostDiagnostics: ObservableObject {
             set(.hostKey, .pass, "\(key.type) matches the key saved on this iPhone")
             return true
         case .unknown:
+            if center.launch.autoTrusts(key.fingerprint) {
+                center.hosts.trust(key, for: host, address: host.address)
+                self.verdict = .trusted
+                set(.hostKey, .pass, "\(key.type) trusted at launch (fingerprint matched LOJO_SSH_TRUST_FP)")
+                return true
+            }
             set(.hostKey, .warn, "\(key.type) not saved yet. Check the fingerprint below, then trust it.")
             return false
         case .changed:
@@ -225,7 +231,7 @@ struct DiagnosticsView: View {
                         StepRow(step: step)
                     }
                 } header: {
-                    Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact)):\(host.port)")
+                    Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact)):\(String(host.port))")
                         .textCase(nil)
                         .font(.footnote.monospaced())
                 }
