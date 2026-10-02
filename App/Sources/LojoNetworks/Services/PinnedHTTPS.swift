@@ -20,7 +20,7 @@ enum PinnedHTTPS {
         let box = Box()
         let queue = DispatchQueue(label: "lojo.pinnedhttps")
         sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, trust, complete in
-            let decision = pinning.evaluatePeer(trust: sec_trust_copy_ref(trust), url: url)
+            let decision = pinning.evaluatePeer(trust: sec_trust_copy_ref(trust).takeRetainedValue(), url: url)
             box.store(decision)
             // Complete off this queue. Completing inline can deadlock the handshake queue.
             DispatchQueue.global(qos: .userInitiated).async {
