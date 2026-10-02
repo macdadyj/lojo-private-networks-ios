@@ -124,12 +124,3 @@ enum AddressDisplay {
         return "\(parts[0]).\(parts[1]).•.•"
     }
 }
-
-/// The phone side of the overlay-only rule: SSH needs the LOJO VPN tunnel up.
-enum PhoneVPN {
-    static var overlayAddress: String? {
-        guard let ip = PhoneInterfaces.current().vpnIPv4, let v = IPv4Range.parse(ip),
-              OverlayPolicy.overlay.contains(v) else { return nil }
-        return ip
-    }
-}

@@ -113,6 +113,8 @@ public final class SSHConnection: Sendable {
             .channelOption(NIOTSChannelOptions.waitForActivity, value: false)
             .tcpOptions(tcp)
             .channelInitializer(initializer)
+        // No requiredInterface. 100.64.0.0/10 is routed out the overlay utun; pinning the
+        // socket to cellular (or to ipsec, which is also the 464XLAT CLAT) would miss that route.
         return NIOClientTCPBootstrap(ts, tls: NIOInsecureNoTLS())
         #else
         let posix = ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)

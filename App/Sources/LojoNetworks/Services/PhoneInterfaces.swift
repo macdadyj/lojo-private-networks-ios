@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LojoSSH
 import Network
 
 /// What the phone itself is attached to, read from the kernel's interface list.
@@ -15,32 +16,32 @@ struct PhoneInterfaces: Sendable, Equatable {
     var vpnSummary: String? { vpnIPv4.map { "\(vpnInterface ?? "utun") \($0)" } }
 
     static func current() -> PhoneInterfaces {
-        var result = PhoneInterfaces(wifiIPv4: nil, cellularActive: false, vpnIPv4: nil, vpnInterface: nil)
+        var records: [InterfaceAddress] = []
         var head: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&head) == 0, let first = head else { return result }
+        guard getifaddrs(&head) == 0, let first = head else {
+            return PhoneInterfaces(wifiIPv4: nil, cellularActive: false, vpnIPv4: nil, vpnInterface: nil)
+        }
         defer { freeifaddrs(head) }
 
         var cursor: UnsafeMutablePointer<ifaddrs>? = first
         while let ifa = cursor {
             defer { cursor = ifa.pointee.ifa_next }
             let flags = Int32(ifa.pointee.ifa_flags)
-            guard flags & IFF_UP != 0, flags & IFF_RUNNING != 0,
-                  let addr = ifa.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET)
-            else { continue }
+            guard flags & IFF_UP != 0, flags & IFF_RUNNING != 0 else { continue }
             let name = String(cString: ifa.pointee.ifa_name)
-            guard let ip = ipv4String(addr) else { continue }
-            if name == "en0" {
-                result.wifiIPv4 = ip
-            } else if name.hasPrefix("pdp_ip") {
-                result.cellularActive = true
-            } else if name.hasPrefix("utun") || name.hasPrefix("ipsec") || name.hasPrefix("ppp") {
-                if !ip.hasPrefix("169.254.") {
-                    result.vpnIPv4 = ip
-                    result.vpnInterface = name
-                }
+            if let addr = ifa.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET), let ip = ipv4String(addr) {
+                records.append(InterfaceAddress(name: name, ipv4: ip))
+            } else if name == "en0" || name.hasPrefix("pdp_ip") {
+                records.append(InterfaceAddress(name: name, ipv4: nil))
             }
         }
-        return result
+        let picked = InterfacePick.select(records)
+        return PhoneInterfaces(
+            wifiIPv4: picked.wifiIPv4,
+            cellularActive: picked.cellularActive,
+            vpnIPv4: picked.vpnIPv4,
+            vpnInterface: picked.vpnInterface
+        )
     }
 
     private static func ipv4String(_ addr: UnsafeMutablePointer<sockaddr>) -> String? {

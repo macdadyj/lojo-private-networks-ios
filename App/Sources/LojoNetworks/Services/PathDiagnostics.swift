@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LojoSSH
 import Network
 
 /// One line of an on-screen diagnostics report.
@@ -198,6 +199,8 @@ enum TCPProbe {
         if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
             tcp.connectionTimeout = Int(timeout)
         }
+        // No requiredInterface. The overlay route (100.64.0.0/10) leaves via utun; pinning
+        // the socket to cellular, or to ipsec (the 464XLAT CLAT), would miss that route.
         let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
         let once = Once()
         let start = Date()
@@ -220,7 +223,7 @@ enum TCPProbe {
                         local = "\(h)".components(separatedBy: "%").first
                     }
                     var iface: String?
-                    if let i = path?.availableInterfaces.first {
+                    if let i = chosenInterface(local: local, interfaces: path?.availableInterfaces ?? []) {
                         iface = "\(i.name) (\(interfaceKind(i)))"
                     }
                     finish(Result(ok: true, ms: elapsed(), localAddress: local, interfaceText: iface, error: nil))
@@ -237,8 +240,28 @@ enum TCPProbe {
         }
     }
 
+    /// The interface that owns the local address. `availableInterfaces.first` can be the
+    /// cellular CLAT (`ipsec`) even when the source address is the overlay on `utun`.
+    private static func chosenInterface(local: String?, interfaces: [NWInterface]) -> NWInterface? {
+        guard let first = interfaces.first else { return nil }
+        guard let local, let value = IPv4Range.parse(local) else {
+            return interfaces.first { !$0.name.hasPrefix("ipsec") } ?? first
+        }
+        if OverlayPolicy.overlay.contains(value) {
+            return interfaces.first { $0.name.hasPrefix("utun") }
+                ?? interfaces.first { !$0.name.hasPrefix("ipsec") }
+                ?? first
+        }
+        if InterfacePick.clat.contains(value) {
+            return interfaces.first { $0.name.hasPrefix("ipsec") } ?? first
+        }
+        return interfaces.first { !$0.name.hasPrefix("ipsec") } ?? first
+    }
+
     private static func interfaceKind(_ i: NWInterface) -> String {
-        if i.name.hasPrefix("utun") || i.name.hasPrefix("ipsec") { return "VPN tunnel" }
+        // ipsec is also the cellular 464XLAT interface. Only utun is the OpenVPN overlay.
+        if i.name.hasPrefix("utun") { return "VPN tunnel" }
+        if i.name.hasPrefix("ipsec") { return "ipsec" }
         switch i.type {
         case .wifi: return "Wi‑Fi"
         case .cellular: return "cellular"

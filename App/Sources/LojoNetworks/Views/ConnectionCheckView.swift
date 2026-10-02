@@ -235,7 +235,10 @@ final class ConnectionCheck: ObservableObject {
 
     static func verdict(phone: PhoneInterfaces, lan: PathReport?, overlay: PathReport?, legacy: PathReport?, paired: Bool) -> Verdict {
         let viaLAN = lan?.reachable == true
-        let viaOverlay = overlay?.reachable == true || legacy?.reachable == true
+        let identityFailed = [lan, overlay].compactMap { $0 }.contains { report in
+            report.protection == .tls && report.probe?.error?.tlsFailure?.rejectsIdentity == true
+        }
+        let viaOverlay = overlay?.reachable == true || (!identityFailed && legacy?.reachable == true)
         let overlayUsed = overlay?.reachable == true ? overlay : legacy
         let net = (viaLAN ? lan : overlayUsed)?.probe?.network
         let securityTip: String? = {

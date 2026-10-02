@@ -34,14 +34,20 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
             ]
         ),
+        .target(name: "LojoTrust"),
         .target(
             name: "LojoNetworks",
             dependencies: [
+                "LojoTrust",
                 "LojoSSH",
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ]
+        ),
+        .testTarget(
+            name: "LojoTrustTests",
+            dependencies: ["LojoTrust"]
         ),
     ]
 )

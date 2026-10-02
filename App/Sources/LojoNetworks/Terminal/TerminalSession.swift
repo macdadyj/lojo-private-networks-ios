@@ -6,10 +6,12 @@ import UIKit
 
 enum TerminalError: Error, CustomStringConvertible {
     case vpnDown
+    case needsSiteWiFi
 
     var description: String {
         switch self {
         case .vpnDown: return "Turn on LOJO VPN (OpenVPN Connect). SSH only runs over the private overlay."
+        case .needsSiteWiFi: return "Needs site Wi‑Fi. This address is on the shop LAN, not the overlay."
         }
     }
 }
@@ -117,7 +119,14 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
 
     private func establish() async throws {
-        guard PhoneVPN.overlayAddress != nil else { throw TerminalError.vpnDown }
+        switch center.access(to: host.address) {
+        case .open:
+            break
+        case .needsOverlay:
+            throw TerminalError.vpnDown
+        case .needsSiteWiFi:
+            throw TerminalError.needsSiteWiFi
+        }
         let policy = center.hosts.policy
         let name = host.address
         let address = try await Task.detached { try policy.resolve(name) }.value
@@ -251,7 +260,18 @@ final class TerminalSession: ObservableObject, Identifiable {
     private func reconnectLoop() async {
         var attempt = 0
         while !Task.isCancelled, !userClosed {
-            guard PhoneVPN.overlayAddress != nil, center.isActive else {
+            guard center.isActive else {
+                phase = .waitingForVPN
+                try? await Task.sleep(for: .seconds(2))
+                continue
+            }
+            switch center.access(to: host.address) {
+            case .open:
+                break
+            case .needsSiteWiFi:
+                phase = .failed(TerminalError.needsSiteWiFi.description)
+                return
+            case .needsOverlay:
                 phase = .waitingForVPN
                 try? await Task.sleep(for: .seconds(2))
                 continue

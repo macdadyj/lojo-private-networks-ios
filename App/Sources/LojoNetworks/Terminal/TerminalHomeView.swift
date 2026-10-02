@@ -21,7 +21,7 @@ struct TerminalHomeView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if center.vpnAddress == nil {
+                if !center.overlayIsUp {
                     vpnBanner
                 }
                 if !center.sessions.isEmpty {
@@ -102,6 +102,9 @@ struct TerminalHomeView: View {
                 .environmentObject(keys)
         }
         .onAppear(perform: appear)
+        .onChange(of: store.overlayReachable) { _, up in
+            center.setOverlayProbe(up)
+        }
         .onChange(of: scenePhase) { _, phase in
             center.sceneChanged(active: phase == .active)
         }
@@ -139,6 +142,7 @@ struct TerminalHomeView: View {
     }
 
     private func appear() {
+        center.setOverlayProbe(store.overlayReachable)
         hosts.seedDefaults(overlayGatewayURL: store.launch.overlayOverride ?? store.overlayAddress, gatewayPort: center.launch.gatewayPort)
         if center.canRefreshDirectory, center.directoryIsStale || (center.launch.refresh && !center.launchApplied) {
             Task { await center.refreshDirectory() }
@@ -210,6 +214,7 @@ private struct HostRow: View {
     let onDiagnose: () -> Void
 
     private var trusted: Bool { !hosts.savedHostKeys(for: host).isEmpty }
+    private var access: HostAccess { center.access(to: host.address) }
 
     var body: some View {
         Button {
@@ -226,6 +231,11 @@ private struct HostRow: View {
                     Text("\(host.username)@\(AddressDisplay.text(host.address, redact: center.redact)):\(String(host.port))")
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
+                    if access == .needsSiteWiFi {
+                        Text("Needs site Wi‑Fi")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(LojoTheme.warning)
+                    }
                 }
                 Spacer()
                 if trusted {
@@ -235,7 +245,7 @@ private struct HostRow: View {
                 }
             }
         }
-        .disabled(center.vpnAddress == nil)
+        .disabled(access != .open)
         .swipeActions {
             Button("Edit", action: onEdit).tint(LojoTheme.accentDeep)
             Button("Diagnose", action: onDiagnose).tint(LojoTheme.warning)
@@ -324,6 +334,7 @@ private struct DirectoryRow: View {
     let onDiagnose: (SSHHost) -> Void
 
     private var isThisPhone: Bool { entry.address == center.vpnAddress }
+    private var access: HostAccess { center.access(to: entry.address) }
 
     var body: some View {
         Button {
@@ -333,7 +344,7 @@ private struct DirectoryRow: View {
                 Circle().fill(entry.online ? LojoTheme.online : Color.secondary.opacity(0.5)).frame(width: 9, height: 9)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.name).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text("\(HostDefaults.username(for: entry))@\(AddressDisplay.text(entry.address, redact: center.redact)):\(String(HostDefaults.port(for: entry))) · \(entry.group)\(entry.sshOpen ? "" : " · SSH not seen")")
+                    Text("\(HostDefaults.username(for: entry))@\(AddressDisplay.text(entry.address, redact: center.redact)):\(String(HostDefaults.port(for: entry))) · \(entry.group)\(entry.sshOpen ? "" : " · SSH not seen")\(access == .needsSiteWiFi ? " · Needs site Wi‑Fi" : "")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -346,7 +357,7 @@ private struct DirectoryRow: View {
                 }
             }
         }
-        .disabled(isThisPhone || center.vpnAddress == nil)
+        .disabled(isThisPhone || access != .open)
         .contextMenu {
             if !isThisPhone {
                 Button("Connect", systemImage: "terminal") { center.open(entry) }

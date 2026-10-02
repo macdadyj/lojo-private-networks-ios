@@ -13,18 +13,22 @@ enum PlainHTTP {
               let port = NWEndpoint.Port(rawValue: UInt16(url.port ?? 80)) else {
             throw URLError(.badURL)
         }
-        var target = url.path.isEmpty ? "/" : url.path
-        if let q = url.query { target += "?" + q }
+        let payload = message(request, host: host, port: port.rawValue)
+        let raw = try await exchange(host: host, port: port, payload: payload, timeout: timeout)
+        return try parse(raw, url: url)
+    }
+
+    static func message(_ request: URLRequest, host: String, port: UInt16) -> Data {
+        var target = request.url?.path ?? "/"
+        if target.isEmpty { target = "/" }
+        if let q = request.url?.query { target += "?" + q }
         var head = "\(request.httpMethod ?? "GET") \(target) HTTP/1.1\r\n"
-        head += "Host: \(host):\(port.rawValue)\r\nConnection: close\r\nAccept: */*\r\nUser-Agent: LOJONetworks\r\n"
+        head += "Host: \(host):\(port)\r\nConnection: close\r\nAccept: */*\r\nUser-Agent: LOJONetworks\r\n"
         for (k, v) in request.allHTTPHeaderFields ?? [:] { head += "\(k): \(v)\r\n" }
         let body = request.httpBody ?? Data()
         if !body.isEmpty || request.httpMethod == "POST" { head += "Content-Length: \(body.count)\r\n" }
         head += "\r\n"
-        let payload = Data(head.utf8) + body
-
-        let raw = try await exchange(host: host, port: port, payload: payload, timeout: timeout)
-        return try parse(raw, url: url)
+        return Data(head.utf8) + body
     }
 
     private final class Box: @unchecked Sendable {
@@ -97,7 +101,7 @@ enum PlainHTTP {
         }
     }
 
-    private static func parse(_ raw: Data, url: URL) throws -> (Data, HTTPURLResponse) {
+    static func parse(_ raw: Data, url: URL) throws -> (Data, HTTPURLResponse) {
         let sep = Data("\r\n\r\n".utf8)
         guard let range = raw.range(of: sep),
               let headText = String(data: raw[..<range.lowerBound], encoding: .utf8) else {

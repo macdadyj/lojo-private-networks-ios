@@ -362,7 +362,7 @@ private struct EndedCard: View {
                     .buttonStyle(SecondaryButtonStyle())
                 Button("Reconnect") { session.connect() }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(center.vpnAddress == nil)
+                    .disabled(center.access(to: session.host.address) != .open)
             }
         }
         .padding(16)
