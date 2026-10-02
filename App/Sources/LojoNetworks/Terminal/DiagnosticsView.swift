@@ -88,7 +88,14 @@ final class HostDiagnostics: ObservableObject {
         let probe = await SSHProbe.banner(address: resolved, port: host.port)
         guard let connectMillis = probe.connectMillis else {
             var why = probe.error?.description ?? "Can’t connect"
-            if PhoneVPN.overlayAddress == nil { why += " The LOJO VPN is off." }
+            switch center.access(to: resolved) {
+            case .needsOverlay:
+                why += " The LOJO VPN is off."
+            case .needsSiteWiFi:
+                why += " Needs site Wi‑Fi."
+            case .open:
+                break
+            }
             set(.tcp, .fail, why, millis: SSHProbe.millis(since: tcpStart))
             skip(from: .banner, "Not tried")
             return
@@ -117,13 +124,12 @@ final class HostDiagnostics: ObservableObject {
     private func checkVPN() {
         set(.vpn, .running)
         let phone = PhoneInterfaces.current()
-        let interface = phone.vpnInterface ?? "utun"
-        if let ip = PhoneVPN.overlayAddress {
-            set(.vpn, .pass, "\(interface) · \(mask(ip))")
-        } else if let ip = phone.vpnIPv4 {
-            set(.vpn, .fail, "A VPN is up (\(interface) \(mask(ip))) but it has no LOJO overlay address (100.64.0.0/10). Switch OpenVPN Connect to the LOJO profile.")
+        if let ip = phone.vpnIPv4 {
+            set(.vpn, .pass, "\(phone.vpnInterface ?? "utun") · \(mask(ip))")
+        } else if center.overlayProbeUp {
+            set(.vpn, .pass, "The overlay gateway answered, so the tunnel is up.")
         } else {
-            set(.vpn, .fail, "No VPN tunnel. Turn on the LOJO profile in OpenVPN Connect.")
+            set(.vpn, .fail, "No address in 100.64.0.0/10. Turn on the LOJO profile in OpenVPN Connect. 192.0.0.0/29 is cellular 464XLAT, not the VPN.")
         }
     }
 

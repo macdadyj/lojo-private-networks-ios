@@ -70,6 +70,10 @@ final class TerminalCenter: ObservableObject {
     @Published var showingSession = false
     @Published private(set) var directoryState: DirectoryState = .idle
     @Published private(set) var vpnAddress: String?
+    @Published private(set) var wifiIPv4: String?
+    /// Set from a successful overlay probe. The interface list can miss utun while the probe still went out it.
+    @Published private(set) var overlayProbeUp = false
+    var overlayIsUp: Bool { vpnAddress != nil || overlayProbeUp }
     @Published var theme: TerminalTheme {
         didSet { defaults.set(theme.rawValue, forKey: Keys.theme); restyle() }
     }
@@ -100,7 +104,9 @@ final class TerminalCenter: ObservableObject {
         let size = defaults.double(forKey: Keys.fontSize)
         fontSize = Self.fontRange.contains(size) ? size : 13
         redact = launch.redact || defaults.bool(forKey: Keys.redact)
-        vpnAddress = PhoneVPN.overlayAddress
+        let phone = PhoneInterfaces.current()
+        vpnAddress = phone.vpnIPv4
+        wifiIPv4 = phone.wifiIPv4
         vpnMonitor = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
@@ -112,8 +118,17 @@ final class TerminalCenter: ObservableObject {
     var selected: TerminalSession? { sessions.first { $0.id == selectedID } ?? sessions.last }
 
     func refreshVPN() {
-        let now = PhoneVPN.overlayAddress
-        if now != vpnAddress { vpnAddress = now }
+        let phone = PhoneInterfaces.current()
+        if phone.vpnIPv4 != vpnAddress { vpnAddress = phone.vpnIPv4 }
+        if phone.wifiIPv4 != wifiIPv4 { wifiIPv4 = phone.wifiIPv4 }
+    }
+
+    func setOverlayProbe(_ up: Bool) {
+        if overlayProbeUp != up { overlayProbeUp = up }
+    }
+
+    func access(to address: String) -> HostAccess {
+        HostGate.access(address: address, policy: hosts.policy, overlayUp: overlayIsUp, wifiIPv4: wifiIPv4)
     }
 
     func sceneChanged(active: Bool) {
@@ -184,7 +199,7 @@ final class TerminalCenter: ObservableObject {
 
     /// True once the gateway's host key is trusted and the VPN is up, so a refresh can't prompt.
     var canRefreshDirectory: Bool {
-        guard vpnAddress != nil, let gateway = hosts.gateway else { return false }
+        guard overlayIsUp, let gateway = hosts.gateway else { return false }
         return !hosts.savedHostKeys(for: gateway).isEmpty && directoryState != .loading
     }
 
@@ -205,7 +220,7 @@ final class TerminalCenter: ObservableObject {
             directoryState = .failed("Connect to the site gateway once and trust its host key, then pull the device list.")
             return
         }
-        guard PhoneVPN.overlayAddress != nil else {
+        guard overlayIsUp else {
             directoryState = .failed(TerminalError.vpnDown.description)
             return
         }

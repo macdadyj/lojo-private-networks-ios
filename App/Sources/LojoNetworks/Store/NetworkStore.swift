@@ -160,6 +160,12 @@ final class NetworkStore: ObservableObject {
 
     var isStale: Bool { link == .unreachable && lastSuccess != nil }
 
+    /// The overlay gateway answered on this phone, so the tunnel is up even if interface names lied.
+    var overlayReachable: Bool {
+        if case .connected(let ep) = link, ep.path == .overlay { return true }
+        return lastProbes.contains { $0.endpoint.path == .overlay && $0.reachable }
+    }
+
     var hubConnected: Bool { network?.hub.connected ?? false }
 
     var localNetworkBlocked: Bool {
