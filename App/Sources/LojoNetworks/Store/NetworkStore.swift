@@ -295,6 +295,9 @@ final class NetworkStore: ObservableObject {
                     Haptics.error()
                     return false
                 }
+                // Publish the pin before the https addresses. A refresh that lands in between
+                // would otherwise dial TLS with no anchor and fail the handshake.
+                siteCA = ca
                 if let lan = offer.lan?.absoluteString {
                     lanAddress = lan
                     defaults.set(lan, forKey: Keys.pairedLAN)
@@ -304,7 +307,6 @@ final class NetworkStore: ObservableObject {
                     defaults.set(ov, forKey: Keys.pairedOverlay)
                 }
                 adoptSiteName(net.site?.name ?? offer.name)
-                siteCA = ca
                 pendingPairing = nil
                 pairingState = .idle
                 lastProbes = []
@@ -395,7 +397,11 @@ final class NetworkStore: ObservableObject {
 
         let results = await probeAll()
         lastProbes = results
-        if let hit = results.first(where: \.reachable) {
+        // A rejected certificate must not fall through to legacy HTTP on the overlay.
+        // That fallback is only for a gateway that still doesn't speak HTTPS.
+        let identityFailed = results.contains { $0.endpoint.secure && $0.error?.tlsFailure?.rejectsIdentity == true }
+        let usable = identityFailed ? results.filter(\.endpoint.secure) : results
+        if let hit = usable.first(where: \.reachable) {
             latencyMs = hit.latencyMs
             if await load(from: hit.endpoint) {
                 if reason == .user { Haptics.light() }

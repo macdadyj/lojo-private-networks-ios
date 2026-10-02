@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LojoTrust
 import Security
 
 /// The site's private certificate authority, pinned on this phone after pairing.
@@ -48,11 +49,29 @@ struct SiteCA: Sendable, Equatable {
 }
 
 /// Keychain storage for the pinned site CA (this device only, available after first unlock).
+///
+/// The item lives in this app's default keychain access group, which is the application
+/// identifier (team prefix + bundle id, e.g. `XTL-N9H4648NB9.com.lojo.PrivateNetworks`).
+/// Do not set `kSecAttrAccessGroup` to the bare bundle id: that group isn't in the
+/// entitlements, so save fails with `errSecMissingEntitlement` and the pin never sticks.
 enum SiteTrustStore {
-    private static let service = "com.lojo.PrivateNetworks.siteCA"
+    private static let legacyService = "com.lojo.PrivateNetworks.siteCA"
     private static let account = "site"
 
+    /// Service name includes the bundle id so a shared access group can't hand this phone
+    /// another app's pin. For `com.lojo.PrivateNetworks` this is the same string as before.
+    private static var service: String {
+        let id = Bundle.main.bundleIdentifier ?? "com.lojo.PrivateNetworks"
+        return "\(id).siteCA"
+    }
+
     static func load() -> SiteCA? {
+        if let ca = load(service: service) { return ca }
+        if service != legacyService { return load(service: legacyService) }
+        return nil
+    }
+
+    private static func load(service: String) -> SiteCA? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -81,12 +100,14 @@ enum SiteTrustStore {
     }
 
     static func delete() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
+        for name in Set([service, legacyService]) {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: name,
+                kSecAttrAccount as String: account,
+            ]
+            SecItemDelete(query as CFDictionary)
+        }
     }
 }
 
@@ -166,7 +187,21 @@ struct TLSFailure: Sendable, Hashable {
             switch code {
             case -9806, -9816: return "The connection closed during the TLS handshake. The port may not be speaking HTTPS (is it the legacy HTTP port?)."
             case -9836, -9831: return "The other end didn't answer in TLS. Usually the address points at the legacy HTTP port (8801) instead of HTTPS (8443); otherwise the server only offers an old TLS version."
+            case -9802: return "The phone closed the TLS handshake while checking the gateway certificate."
             default: return "The TLS handshake with the gateway failed."
+            }
+        }
+    }
+
+    /// A certificate was rejected. Legacy HTTP must not paper over that.
+    var rejectsIdentity: Bool {
+        switch kind {
+        case .notPaired, .pinMismatch, .pairingMismatch, .hostnameMismatch, .expired, .untrusted:
+            return true
+        case .handshake(let code):
+            switch code {
+            case -9802, -9807, -9808, -9813: return true
+            default: return false
             }
         }
     }
@@ -205,9 +240,15 @@ final class TLSObserver: @unchecked Sendable {
     private var failures: [String: (TLSFailure, Date)] = [:]
     private var sessions: [String: TLSSession] = [:]
 
+    static func key(host: String, port: Int) -> String {
+        var name = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if name.hasSuffix(".") { name.removeLast() }
+        return "\(name.lowercased()):\(port)"
+    }
+
     static func key(_ url: URL?) -> String {
-        guard let url, let host = url.host else { return "" }
-        return "\(host):\(GatewayAddress.port(of: url))"
+        guard let url, let host = url.host, !host.isEmpty else { return "" }
+        return key(host: host, port: GatewayAddress.port(of: url))
     }
 
     func fail(_ key: String, _ f: TLSFailure) { lock.withLock { failures[key] = (f, Date()) } }
@@ -219,10 +260,17 @@ final class TLSObserver: @unchecked Sendable {
     }
     func version(_ key: String, _ v: String?) { lock.withLock { sessions[key, default: TLSSession()].version = v } }
     /// The failure recorded by the delegate for the request that just failed (ignores stale notes).
+    /// A host match covers a port spelling difference between the URL and the protection space.
     func failure(_ key: String) -> TLSFailure? {
         lock.withLock {
-            guard let (f, at) = failures[key], Date().timeIntervalSince(at) < 30 else { return nil }
-            return f
+            if let (f, at) = failures[key], Date().timeIntervalSince(at) < 30 { return f }
+            let host = String(key.split(separator: ":").first ?? "")
+            guard !host.isEmpty else { return nil }
+            let recent = failures.filter { name, value in
+                String(name.split(separator: ":").first ?? "") == host && Date().timeIntervalSince(value.1) < 5
+            }
+            guard recent.count == 1, let only = recent.values.first else { return nil }
+            return only.0
         }
     }
     func session(_ key: String) -> TLSSession? { lock.withLock { sessions[key] } }
@@ -239,63 +287,146 @@ final class PinningDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendab
     init(anchor: SiteCA?, pairingSHA256: String? = nil) {
         anchorDER = anchor?.der
         self.pairingSHA256 = pairingSHA256
+        super.init()
+        #if DEBUG
+        assert(responds(to: NSSelectorFromString(ServerTrustChallenge.sessionSelector)),
+               "URLSession will not deliver the server-trust challenge")
+        assert(responds(to: NSSelectorFromString(ServerTrustChallenge.taskSelector)))
+        #endif
     }
 
     /// The CA certificate found in the gateway's chain during pairing.
     var capturedCA: SiteCA? { lock.withLock { captured } }
 
-    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
-        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+    /// Session-level server trust. URLSession calls this ObjC selector; it does not call the async variant.
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let result = handle(challenge, url: nil)
+        completionHandler(result.0, result.1)
+    }
+
+    /// Same check when the challenge is delivered on the task instead of the session.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let result = handle(challenge, url: task.originalRequest?.url)
+        completionHandler(result.0, result.1)
+    }
+
+    private func handle(_ challenge: URLAuthenticationChallenge, url: URL?) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else { return (.performDefaultHandling, nil) }
-        let host = challenge.protectionSpace.host
-        let key = "\(host):\(challenge.protectionSpace.port)"
+        let protectionHost = challenge.protectionSpace.host
+        let host = protectionHost.isEmpty ? (url?.host ?? "") : protectionHost
+        let port = challenge.protectionSpace.port > 0 ? challenge.protectionSpace.port : (url.map(GatewayAddress.port(of:)) ?? GatewayAddress.defaultTLSPort)
         let chain = (SecTrustCopyCertificateChain(trust) as? [SecCertificate]) ?? []
         let ders = chain.map { SecCertificateCopyData($0) as Data }
         let presentedRoot = ders.last.map(SiteCA.hex)
+        var noted: [String] = [TLSObserver.key(host: host, port: port)]
+        if let url { noted.append(TLSObserver.key(url)) }
 
-        var anchor: Data?
-        if let pairingSHA256 {
-            anchor = ders.first { SiteCA.hex($0) == pairingSHA256 }
-            if anchor == nil {
-                TLSObserver.shared.fail(key, TLSFailure(kind: .pairingMismatch(presented: presentedRoot)))
-                return (.cancelAuthenticationChallenge, nil)
-            }
-        } else {
-            anchor = anchorDER
-            guard anchor != nil else {
-                TLSObserver.shared.fail(key, TLSFailure(kind: .notPaired))
-                return (.cancelAuthenticationChallenge, nil)
-            }
-        }
-        guard let anchorDER = anchor, let anchorCert = SecCertificateCreateWithData(nil, anchorDER as CFData) else {
+        func fail(_ failure: TLSFailure) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+            for key in noted { TLSObserver.shared.fail(key, failure) }
             return (.cancelAuthenticationChallenge, nil)
         }
 
-        SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, host as CFString))
-        SecTrustSetAnchorCertificates(trust, [anchorCert] as CFArray)
-        SecTrustSetAnchorCertificatesOnly(trust, true)
-        var error: CFError?
-        if SecTrustEvaluateWithError(trust, &error) {
-            if pairingSHA256 != nil, let ca = SiteCA(der: anchorDER) { lock.withLock { captured = ca } }
-            TLSObserver.shared.succeed(key, leaf: ders.first.map(SiteCA.hex))
-            return (.useCredential, URLCredential(trust: trust))
+        let anchorData: Data
+        if let pairingSHA256 {
+            guard let found = ders.first(where: { SiteCA.hex($0) == pairingSHA256 }) else {
+                return fail(TLSFailure(kind: .pairingMismatch(presented: presentedRoot)))
+            }
+            anchorData = found
+        } else if let stored = anchorDER {
+            anchorData = stored
+        } else {
+            return fail(TLSFailure(kind: .notPaired))
+        }
+        guard let anchorCert = SecCertificateCreateWithData(nil, anchorData as CFData) else {
+            return fail(TLSFailure(kind: .untrusted(code: Int(errSecDecode)), detail: "The pinned CA couldn't be read."))
         }
 
-        let code = error.map { CFErrorGetCode($0) } ?? 0
-        let text = error.map { CFErrorCopyDescription($0) as String }
-        let pinnedInChain = ders.contains(anchorDER)
-        let failure: TLSFailure
-        switch Int(code) {
-        case -67602: failure = TLSFailure(kind: .hostnameMismatch, detail: text)
-        case -67818, -67819: failure = TLSFailure(kind: .expired, detail: text)
-        default:
-            failure = pinnedInChain
-                ? TLSFailure(kind: .untrusted(code: Int(code)), detail: text)
-                : TLSFailure(kind: .pinMismatch(presented: presentedRoot), detail: text)
+        let anchorHash = SiteCA.hex(anchorData)
+        let extras = ders.dropFirst().filter { SiteCA.hex($0) != anchorHash }
+        var nameMatched = false
+        if let leaf = ders.first {
+            switch GatewayChainTrust.evaluate(leafDER: leaf, intermediateDERs: Array(extras), caDER: anchorData, host: host) {
+            case .trusted:
+                nameMatched = true
+            case .malformed:
+                nameMatched = false
+            case .hostnameMismatch:
+                return fail(TLSFailure(kind: .hostnameMismatch, detail: "The certificate doesn't list \(host)."))
+            case .pathLength:
+                return fail(TLSFailure(kind: .untrusted(code: Int(errSecPathLengthConstraintExceeded)), detail: "The site CA pathlen does not allow this chain."))
+            case .notServer:
+                return fail(TLSFailure(kind: .untrusted(code: Int(errSecInvalidExtendedKeyUsage)), detail: "The certificate isn't a TLS server certificate."))
+            case .expired:
+                return fail(TLSFailure(kind: .expired))
+            }
         }
-        TLSObserver.shared.fail(key, failure)
-        return (.cancelAuthenticationChallenge, nil)
+
+        SecTrustSetNetworkFetchAllowed(trust, false)
+        if let error = pinnedTrustError(trust, anchor: anchorCert, host: host, nameMatched: nameMatched) {
+            let code = Int(CFErrorGetCode(error))
+            let text = CFErrorCopyDescription(error) as String
+            let pinnedInChain = ders.contains { SiteCA.hex($0) == anchorHash }
+            let failure: TLSFailure
+            switch code {
+            case Int(errSecHostNameMismatch): failure = TLSFailure(kind: .hostnameMismatch, detail: text)
+            case -67818, -67819: failure = TLSFailure(kind: .expired, detail: text)
+            default:
+                failure = pinnedInChain
+                    ? TLSFailure(kind: .untrusted(code: code), detail: text)
+                    : TLSFailure(kind: .pinMismatch(presented: presentedRoot), detail: text)
+            }
+            return fail(failure)
+        }
+
+        if pairingSHA256 != nil, let ca = SiteCA(der: anchorData) { lock.withLock { captured = ca } }
+        for key in noted { TLSObserver.shared.succeed(key, leaf: ders.first.map(SiteCA.hex)) }
+        return (.useCredential, URLCredential(trust: trust))
+    }
+
+    /// Nil when the pinned CA verifies the chain. An IP SAN that SecTrust treats as a DNS name,
+    /// and a pathlen:0 anchor with no intermediate, are accepted after the profile check agrees.
+    private func pinnedTrustError(_ trust: SecTrust, anchor: SecCertificate, host: String, nameMatched: Bool) -> CFError? {
+        func evaluate(policyHost: String?) -> CFError? {
+            let policy = policyHost.map { SecPolicyCreateSSL(true, $0 as CFString) } ?? SecPolicyCreateSSL(true, nil)
+            SecTrustSetPolicies(trust, policy)
+            SecTrustSetAnchorCertificates(trust, [anchor] as CFArray)
+            SecTrustSetAnchorCertificatesOnly(trust, true)
+            var error: CFError?
+            if SecTrustEvaluateWithError(trust, &error) { return nil }
+            return error
+        }
+
+        guard var error = evaluate(policyHost: host) else { return nil }
+        if nameMatched, Int(CFErrorGetCode(error)) == Int(errSecHostNameMismatch) {
+            if let retry = evaluate(policyHost: nil) {
+                error = retry
+            } else {
+                return nil
+            }
+        }
+        // trustd applies a pathlen:0 anchor to the leaf and can report
+        // errSecPathLengthConstraintExceeded even when there is no intermediate.
+        // The profile check already required a direct leaf, so that result is not a longer chain.
+        if nameMatched, Int(CFErrorGetCode(error)) == Int(errSecPathLengthConstraintExceeded) {
+            _ = evaluate(policyHost: nil)
+            if let exceptions = SecTrustCopyExceptions(trust) {
+                SecTrustSetExceptions(trust, exceptions)
+                var again: CFError?
+                if SecTrustEvaluateWithError(trust, &again) { return nil }
+                if let again { error = again }
+            }
+        }
+        return error
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {

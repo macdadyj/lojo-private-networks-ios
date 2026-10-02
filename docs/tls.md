@@ -19,7 +19,17 @@ the VPN, without breaking the existing HTTP clients (the old Ranch Field app, de
   `SecTrustSetAnchorCertificates([siteCA])` + `AnchorCertificatesOnly` and the SSL policy for
   the host it dialled. The system trust store is never consulted, so a public or rogue CA can't
   stand in, and a leaf rotation needs nothing on the phone. The CA certificate (public) is stored
-  as a Keychain item, `AfterFirstUnlockThisDeviceOnly`.
+  as a Keychain item, `AfterFirstUnlockThisDeviceOnly`, in this app's default access group
+  (the team prefix plus the bundle id). The service name is `<bundle id>.siteCA`.
+- **URLSession only honors the completion-handler challenge method**
+  (`URLSession:didReceiveChallenge:completionHandler:`). The async Swift method is not invoked
+  for a session delegate, so an implementation of only that method never pins anything: iOS
+  applies default trust, the phone aborts, and the gateway logs `ECONNRESET` /
+  `errSSLFatalAlert (-9802)`. IP addresses are matched against iPAddress SANs, not as DNS names.
+  A CA with `pathlen:0` is allowed to sign the leaf directly (no intermediate).
+  Host-side checks for that profile live in `tools/tls-trust` (`swift test`). They generate a
+  CA and leaf with the same shape as `gateway-tls.sh` (pathlen:0, 397-day leaf, the site's IP
+  and DNS SANs). Signature verification stays on the phone with `SecTrust`.
 - **Pairing is a QR code.** `scripts/gateway-tls.sh pair` shows
   `lojo://pair?v=1&n=<site>&lan=https://…:8443&ov=https://…:8443&ca=<SHA-256 of the CA>`.
   The owner scans it with the iPhone **Camera** app ("Open in LOJO Networks"), or pastes it in
@@ -59,7 +69,9 @@ both.
 - Once paired, the app **never uses plain HTTP on site Wi‑Fi**, so blocking :8443 on the LAN
   can't downgrade it. The overlay fallback exists for gateways still on the pre-1.4 service; it
   is encrypted by the VPN but the gateway's identity isn't checked, and a legacy connection is
-  never "sticky": every refresh tries HTTPS first.
+  never "sticky": every refresh tries HTTPS first. If HTTPS answers and the certificate is
+  rejected (pin, name, expiry, path length, or a fatal alert from that check), the app does not
+  use the legacy port — that would hide a failed identity check behind unauthenticated HTTP.
 - **ATS**: `Info.plist` has no `NSAppTransportSecurity` exceptions at all. URLSession only
   speaks HTTPS. The labelled HTTP fallback runs on Network.framework (`PlainHTTP.swift`), which
   ATS doesn't govern. This also removes the old `NSAllowsArbitraryLoads` exception.
