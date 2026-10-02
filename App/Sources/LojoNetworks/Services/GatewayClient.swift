@@ -322,6 +322,9 @@ struct GatewayClient: Sendable {
             if request.url?.scheme == "http" {
                 return try await PlainHTTP.send(request, timeout: session.configuration.timeoutIntervalForRequest)
             }
+            if request.url?.scheme == "https", let pinning = session.delegate as? PinningDelegate {
+                return try await PinnedHTTPS.send(request, timeout: session.configuration.timeoutIntervalForRequest, pinning: pinning)
+            }
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw GatewayError.badResponse }
             return (data, http)

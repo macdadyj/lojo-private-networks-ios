@@ -170,27 +170,30 @@ struct TLSFailure: Sendable, Hashable {
     }
 
     var meaning: String {
+        let base: String
         switch kind {
         case .notPaired:
-            return "This phone hasn't been paired with your gateway, so it can't check who it's talking to. Scan the gateway's pairing code."
+            base = "This phone hasn't been paired with your gateway, so it can't check who it's talking to. Scan the gateway's pairing code."
         case .pinMismatch(let presented):
-            return "The gateway's certificate wasn't issued by your site's certificate authority (pin mismatch\(presented.map { "; presented root \(Self.short($0))" } ?? "")). If the site CA was rotated, scan the new pairing code; otherwise something else is answering at this address."
+            base = "The gateway's certificate wasn't issued by your site's certificate authority (pin mismatch\(presented.map { "; presented root \(Self.short($0))" } ?? "")). If the site CA was rotated, scan the new pairing code; otherwise something else is answering at this address."
         case .pairingMismatch(let presented):
-            return "The gateway presented a different certificate authority than the pairing code\(presented.map { " (\(Self.short($0)))" } ?? ""). Make sure you scanned the code for this gateway."
+            base = "The gateway presented a different certificate authority than the pairing code\(presented.map { " (\(Self.short($0)))" } ?? ""). Make sure you scanned the code for this gateway."
         case .hostnameMismatch:
-            return "The certificate doesn't list this address. Add it to SANS in site.env on the gateway and run gateway-tls.sh rotate."
+            base = "The certificate doesn't list this address. Add it to SANS in site.env on the gateway and run gateway-tls.sh rotate."
         case .expired:
-            return "The gateway's certificate has expired or isn't valid yet (check the phone's date). Run gateway-tls.sh rotate on the gateway."
+            base = "The gateway's certificate has expired or isn't valid yet (check the phone's date). Run gateway-tls.sh rotate on the gateway."
         case .untrusted:
-            return "iOS couldn't verify the gateway's certificate chain against your site CA\(detail.map { ": \($0)" } ?? ".")"
+            base = "iOS couldn't verify the gateway's certificate chain against your site CA."
         case .handshake(let code):
             switch code {
-            case -9806, -9816: return "The connection closed during the TLS handshake. The port may not be speaking HTTPS (is it the legacy HTTP port?)."
-            case -9836, -9831: return "The other end didn't answer in TLS. Usually the address points at the legacy HTTP port (8801) instead of HTTPS (8443); otherwise the server only offers an old TLS version."
-            case -9802: return "The phone closed the TLS handshake while checking the gateway certificate."
-            default: return "The TLS handshake with the gateway failed."
+            case -9806, -9816: base = "The connection closed during the TLS handshake. The port may not be speaking HTTPS (is it the legacy HTTP port?)."
+            case -9836, -9831: base = "The other end didn't answer in TLS. Usually the address points at the legacy HTTP port (8801) instead of HTTPS (8443); otherwise the server only offers an old TLS version."
+            case -9802: base = "The phone closed the TLS handshake while checking the gateway certificate."
+            default: base = "The TLS handshake with the gateway failed."
             }
         }
+        guard let detail, !detail.isEmpty else { return base }
+        return base + "\n" + detail
     }
 
     /// A certificate was rejected. Legacy HTTP must not paper over that.
@@ -319,114 +322,249 @@ final class PinningDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendab
         completionHandler(result.0, result.1)
     }
 
+    struct PeerDecision {
+        var failure: TLSFailure?
+        /// SecTrust text to show if the handshake still fails after the pin was accepted.
+        var report: String
+        var accepted: Bool { failure == nil }
+    }
+
+    /// Pin check used by the Network.framework verify block and by URLSession.
+    /// The connection is accepted only when a chain certificate's SHA-256 matches the pin,
+    /// SecKey verifies the leaf under that CA, and the leaf name and dates match.
+    /// SecTrust does not get a veto: an IP host or a pathlen-0 anchor can fail its policies
+    /// while those checks still hold. A rejection includes the SecTrust errors.
+    func evaluatePeer(trust: SecTrust, url: URL) -> PeerDecision {
+        let host = url.host ?? ""
+        let port = GatewayAddress.port(of: url)
+        let keys = [TLSObserver.key(url), TLSObserver.key(host: host, port: port)]
+        SecTrustSetNetworkFetchAllowed(trust, false)
+        let chain = (SecTrustCopyCertificateChain(trust) as? [SecCertificate]) ?? []
+        let ders = chain.map { SecCertificateCopyData($0) as Data }
+        let presented = ders.last.map(SiteCA.hex)
+
+        let pinned: String
+        if let pairingSHA256 {
+            pinned = pairingSHA256
+        } else if let anchorDER {
+            pinned = SiteCA.hex(anchorDER)
+        } else {
+            let failure = TLSFailure(kind: .notPaired, detail: "No pairing fingerprint and no saved site CA.")
+            for key in keys { TLSObserver.shared.fail(key, failure) }
+            return PeerDecision(failure: failure, report: failure.detail ?? "")
+        }
+
+        let presentedLine = Self.presentedTrustLine(trust)
+        let profile = GatewayChainTrust.explicitPin(chainDERs: ders, pinnedSHA256: pinned, host: host)
+        switch profile {
+        case .rejected(let rejection):
+            var lines = [rejection.message, presentedLine]
+            if let leaf = ders.first.flatMap(CertificateDER.parse) { lines.append(Self.leafSummary(leaf)) }
+            let caDER = ders.first { SiteCA.hex($0) == pinned.lowercased() }
+            let report = Self.secTrustReport(trust: trust, caDER: caDER, host: host, preamble: lines)
+            let failure = failure(for: rejection, presented: presented, report: report)
+            for key in keys { TLSObserver.shared.fail(key, failure) }
+            return PeerDecision(failure: failure, report: report)
+        case .ready(let der, let signature):
+            var lines = [presentedLine]
+            let signatureError = verifyLeafSignature(signature, caDER: der)
+            if let signatureError {
+                lines.append(signatureError)
+            } else {
+                lines.append("Leaf signature verified with the pinned CA key (ecdsa-with-SHA256).")
+            }
+            if let leaf = CertificateDER.parse(ders[0]), let ca = CertificateDER.parse(der) {
+                lines.append(Self.leafSummary(leaf))
+                lines.append("CA pathlen: \(ca.pathLen.map(String.init) ?? "none"). CA AKI: \(ca.hasAuthorityKeyIdentifier ? "present" : "absent"). CA SKI: \(ca.hasSubjectKeyIdentifier ? "present" : "absent").")
+            }
+            let report = Self.secTrustReport(trust: trust, caDER: der, host: host, preamble: lines)
+            if let signatureError {
+                let failure = TLSFailure(kind: .untrusted(code: Int(errSecVerifyFailed)), detail: report)
+                for key in keys { TLSObserver.shared.fail(key, failure) }
+                return PeerDecision(failure: failure, report: report)
+            }
+            if pairingSHA256 != nil, let ca = SiteCA(der: der) { lock.withLock { captured = ca } }
+            if let anchor = SecCertificateCreateWithData(nil, der as CFData) {
+                Self.arm(trust, anchor: anchor, host: host)
+            }
+            for key in keys { TLSObserver.shared.succeed(key, leaf: ders.first.map(SiteCA.hex)) }
+            return PeerDecision(failure: nil, report: report)
+        }
+    }
+
     private func handle(_ challenge: URLAuthenticationChallenge, url: URL?) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else { return (.performDefaultHandling, nil) }
         let protectionHost = challenge.protectionSpace.host
         let host = protectionHost.isEmpty ? (url?.host ?? "") : protectionHost
+        var parts = URLComponents()
+        parts.scheme = "https"
+        parts.host = host
         let port = challenge.protectionSpace.port > 0 ? challenge.protectionSpace.port : (url.map(GatewayAddress.port(of:)) ?? GatewayAddress.defaultTLSPort)
-        let chain = (SecTrustCopyCertificateChain(trust) as? [SecCertificate]) ?? []
-        let ders = chain.map { SecCertificateCopyData($0) as Data }
-        let presentedRoot = ders.last.map(SiteCA.hex)
-        var noted: [String] = [TLSObserver.key(host: host, port: port)]
-        if let url { noted.append(TLSObserver.key(url)) }
-
-        func fail(_ failure: TLSFailure) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-            for key in noted { TLSObserver.shared.fail(key, failure) }
-            return (.cancelAuthenticationChallenge, nil)
+        parts.port = port
+        let fallback = parts.url ?? URL(string: "https://127.0.0.1:\(port)")
+        let decision = evaluatePeer(trust: trust, url: url ?? fallback ?? URL(string: "https://127.0.0.1")!)
+        if decision.accepted {
+            return (.useCredential, URLCredential(trust: trust))
         }
-
-        let anchorData: Data
-        if let pairingSHA256 {
-            guard let found = ders.first(where: { SiteCA.hex($0) == pairingSHA256 }) else {
-                return fail(TLSFailure(kind: .pairingMismatch(presented: presentedRoot)))
-            }
-            anchorData = found
-        } else if let stored = anchorDER {
-            anchorData = stored
-        } else {
-            return fail(TLSFailure(kind: .notPaired))
-        }
-        guard let anchorCert = SecCertificateCreateWithData(nil, anchorData as CFData) else {
-            return fail(TLSFailure(kind: .untrusted(code: Int(errSecDecode)), detail: "The pinned CA couldn't be read."))
-        }
-
-        let anchorHash = SiteCA.hex(anchorData)
-        let extras = ders.dropFirst().filter { SiteCA.hex($0) != anchorHash }
-        var nameMatched = false
-        if let leaf = ders.first {
-            switch GatewayChainTrust.evaluate(leafDER: leaf, intermediateDERs: Array(extras), caDER: anchorData, host: host) {
-            case .trusted:
-                nameMatched = true
-            case .malformed:
-                nameMatched = false
-            case .hostnameMismatch:
-                return fail(TLSFailure(kind: .hostnameMismatch, detail: "The certificate doesn't list \(host)."))
-            case .pathLength:
-                return fail(TLSFailure(kind: .untrusted(code: Int(errSecPathLengthConstraintExceeded)), detail: "The site CA pathlen does not allow this chain."))
-            case .notServer:
-                return fail(TLSFailure(kind: .untrusted(code: Int(errSecInvalidExtendedKeyUsage)), detail: "The certificate isn't a TLS server certificate."))
-            case .expired:
-                return fail(TLSFailure(kind: .expired))
-            }
-        }
-
-        SecTrustSetNetworkFetchAllowed(trust, false)
-        if let error = pinnedTrustError(trust, anchor: anchorCert, host: host, nameMatched: nameMatched) {
-            let code = Int(CFErrorGetCode(error))
-            let text = CFErrorCopyDescription(error) as String
-            let pinnedInChain = ders.contains { SiteCA.hex($0) == anchorHash }
-            let failure: TLSFailure
-            switch code {
-            case Int(errSecHostNameMismatch): failure = TLSFailure(kind: .hostnameMismatch, detail: text)
-            case -67818, -67819: failure = TLSFailure(kind: .expired, detail: text)
-            default:
-                failure = pinnedInChain
-                    ? TLSFailure(kind: .untrusted(code: code), detail: text)
-                    : TLSFailure(kind: .pinMismatch(presented: presentedRoot), detail: text)
-            }
-            return fail(failure)
-        }
-
-        if pairingSHA256 != nil, let ca = SiteCA(der: anchorData) { lock.withLock { captured = ca } }
-        for key in noted { TLSObserver.shared.succeed(key, leaf: ders.first.map(SiteCA.hex)) }
-        return (.useCredential, URLCredential(trust: trust))
+        return (.cancelAuthenticationChallenge, nil)
     }
 
-    /// Nil when the pinned CA verifies the chain. An IP SAN that SecTrust treats as a DNS name,
-    /// and a pathlen:0 anchor with no intermediate, are accepted after the profile check agrees.
-    private func pinnedTrustError(_ trust: SecTrust, anchor: SecCertificate, host: String, nameMatched: Bool) -> CFError? {
-        func evaluate(policyHost: String?) -> CFError? {
-            let policy = policyHost.map { SecPolicyCreateSSL(true, $0 as CFString) } ?? SecPolicyCreateSSL(true, nil)
-            SecTrustSetPolicies(trust, policy)
-            SecTrustSetAnchorCertificates(trust, [anchor] as CFArray)
-            SecTrustSetAnchorCertificatesOnly(trust, true)
-            var error: CFError?
-            if SecTrustEvaluateWithError(trust, &error) { return nil }
-            return error
+    private func failure(for rejection: PinRejection, presented: String?, report: String) -> TLSFailure {
+        let detail = report
+        let kind: TLSFailure.Kind
+        switch rejection.code {
+        case .pinMismatch:
+            kind = pairingSHA256 != nil ? .pairingMismatch(presented: presented) : .pinMismatch(presented: presented)
+        case .hostname:
+            kind = .hostnameMismatch
+        case .expired:
+            kind = .expired
+        case .pathLength:
+            kind = .untrusted(code: Int(errSecPathLengthConstraintExceeded))
+        case .notServer:
+            kind = .untrusted(code: Int(errSecInvalidExtendedKeyUsage))
+        case .malformed:
+            kind = .untrusted(code: Int(errSecDecode))
         }
+        return TLSFailure(kind: kind, detail: detail)
+    }
 
-        guard var error = evaluate(policyHost: host) else { return nil }
-        if nameMatched, Int(CFErrorGetCode(error)) == Int(errSecHostNameMismatch) {
-            if let retry = evaluate(policyHost: nil) {
-                error = retry
-            } else {
-                return nil
+    /// Nil when the pinned CA's key signed the leaf. Anything else is a reason to refuse.
+    private func verifyLeafSignature(_ signature: CertificateSignature, caDER: Data) -> String? {
+        guard signature.algorithmOID == CertificateDER.ecdsaWithSHA256 else {
+            return "The leaf signature algorithm is \(signature.algorithmOID), not ecdsa-with-SHA256."
+        }
+        guard let cert = SecCertificateCreateWithData(nil, caDER as CFData), let key = SecCertificateCopyKey(cert) else {
+            return "The pinned CA public key could not be read."
+        }
+        var error: Unmanaged<CFError>?
+        let ok = SecKeyVerifySignature(
+            key,
+            .ecdsaSignatureMessageX962SHA256,
+            signature.signedBytes as CFData,
+            signature.signature as CFData,
+            &error
+        )
+        if ok { return nil }
+        let text = error.map { CFErrorCopyDescription($0.takeRetainedValue()) as String } ?? "SecKeyVerifySignature returned false"
+        return "SecKeyVerifySignature (ecdsa-with-SHA256 over the TBS certificate) failed: \(text)"
+    }
+
+    private static func leafSummary(_ leaf: ParsedCertificate) -> String {
+        let ips = leaf.ipAddresses.isEmpty ? "none" : leaf.ipAddresses.joined(separator: ", ")
+        let dns = leaf.dnsNames.isEmpty ? "none" : leaf.dnsNames.joined(separator: ", ")
+        return "Leaf notBefore \(stamp(leaf.notBefore)), notAfter \(stamp(leaf.notAfter)). IP SANs: \(ips). DNS SANs: \(dns). Leaf AKI: \(leaf.hasAuthorityKeyIdentifier ? "present" : "absent"). Leaf SKI: \(leaf.hasSubjectKeyIdentifier ? "present" : "absent")."
+    }
+
+    private static func stamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
+
+    /// The policy the TLS stack already attached, before this app replaces the anchors.
+    private static func presentedTrustLine(_ trust: SecTrust) -> String {
+        var error: CFError?
+        let ok = SecTrustEvaluateWithError(trust, &error)
+        var line = ok ? "SecTrust as presented: accepted" : "SecTrust as presented: failed"
+        if let error {
+            line += " \(CFErrorGetDomain(error) as String) \(Int(CFErrorGetCode(error))) \(CFErrorCopyDescription(error) as String)"
+        }
+        if let result = SecTrustCopyResult(trust) as? [String: Any],
+           let number = result[kSecTrustResultValue as String] as? NSNumber {
+            line += " result \(trustResultName(number.intValue)) (\(number.intValue))"
+        }
+        return ([line] + propertyLines(trust)).joined(separator: "\n")
+    }
+
+    /// What SecTrust says about this chain. Recorded on every attempt so a refusal names the check.
+    private static func secTrustReport(trust: SecTrust, caDER: Data?, host: String, preamble: [String]) -> String {
+        var lines = preamble
+        guard let caDER, let anchor = SecCertificateCreateWithData(nil, caDER as CFData) else {
+            lines.append("SecTrust was not evaluated against the pinned CA because that certificate was not available.")
+            return cap(lines.joined(separator: "\n"))
+        }
+        let sslHost = SecPolicyCreateSSL(true, host as CFString)
+        let sslBare = SecPolicyCreateSSL(true, nil)
+        let basic = SecPolicyCreateBasicX509()
+        lines.append(probe(trust, name: "SSL(\(host))", policy: sslHost, anchor: anchor))
+        lines.append(probe(trust, name: "SSL(no hostname)", policy: sslBare, anchor: anchor))
+        lines.append(probe(trust, name: "BasicX509", policy: basic, anchor: anchor))
+        if let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first {
+            var leafTrust: SecTrust?
+            if SecTrustCreateWithCertificates(leaf, sslBare, &leafTrust) == errSecSuccess, let leafTrust {
+                lines.append(probe(leafTrust, name: "leaf-only SSL(no hostname)", policy: sslBare, anchor: anchor))
             }
         }
-        // trustd applies a pathlen:0 anchor to the leaf and can report
-        // errSecPathLengthConstraintExceeded even when there is no intermediate.
-        // The profile check already required a direct leaf, so that result is not a longer chain.
-        if nameMatched, Int(CFErrorGetCode(error)) == Int(errSecPathLengthConstraintExceeded) {
-            _ = evaluate(policyHost: nil)
-            if let exceptions = SecTrustCopyExceptions(trust) {
-                SecTrustSetExceptions(trust, exceptions)
-                var again: CFError?
-                if SecTrustEvaluateWithError(trust, &again) { return nil }
-                if let again { error = again }
-            }
+        return cap(lines.joined(separator: "\n"))
+    }
+
+    private static func probe(_ trust: SecTrust, name: String, policy: SecPolicy, anchor: SecCertificate) -> String {
+        let anchorStatus = SecTrustSetAnchorCertificates(trust, [anchor] as CFArray)
+        let onlyStatus = SecTrustSetAnchorCertificatesOnly(trust, true)
+        SecTrustSetPolicies(trust, policy)
+        var error: CFError?
+        let ok = SecTrustEvaluateWithError(trust, &error)
+        var line = ok ? "\(name): accepted" : "\(name): failed"
+        if anchorStatus != errSecSuccess { line += " (set anchor \(anchorStatus))" }
+        if onlyStatus != errSecSuccess { line += " (anchors only \(onlyStatus))" }
+        if let error {
+            let code = Int(CFErrorGetCode(error))
+            let domain = CFErrorGetDomain(error) as String
+            let desc = CFErrorCopyDescription(error) as String
+            line += " \(domain) \(code) \(desc)"
         }
-        return error
+        if let result = SecTrustCopyResult(trust) as? [String: Any],
+           let number = result[kSecTrustResultValue as String] as? NSNumber {
+            line += " result \(trustResultName(number.intValue)) (\(number.intValue))"
+        }
+        return ([line] + propertyLines(trust)).joined(separator: "\n")
+    }
+
+    private static func propertyLines(_ trust: SecTrust) -> [String] {
+        guard let props = SecTrustCopyProperties(trust) as? [[String: Any]] else { return [] }
+        var lines: [String] = []
+        for (index, prop) in props.enumerated() {
+            let title = prop[kSecPropertyTypeTitle as String] as? String ?? ""
+            let message = prop[kSecPropertyTypeError as String] as? String ?? ""
+            if !message.isEmpty { lines.append("  cert \(index) \(title): \(message)") }
+        }
+        return lines
+    }
+
+    /// After the explicit pin has already succeeded, make this trust object evaluate successfully
+    /// so URLSession will use the credential. The verify block does not rely on this.
+    private static func arm(_ trust: SecTrust, anchor: SecCertificate, host: String) {
+        let policy = SecPolicyCreateSSL(true, host as CFString)
+        SecTrustSetAnchorCertificates(trust, [anchor] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(trust, true)
+        SecTrustSetPolicies(trust, policy)
+        var error: CFError?
+        if SecTrustEvaluateWithError(trust, &error) { return }
+        if let exceptions = SecTrustCopyExceptions(trust) {
+            SecTrustSetExceptions(trust, exceptions)
+            _ = SecTrustEvaluateWithError(trust, &error)
+        }
+    }
+
+    private static func trustResultName(_ value: Int) -> String {
+        switch value {
+        case 1: return "proceed"
+        case 2: return "confirm"
+        case 3: return "deny"
+        case 4: return "unspecified"
+        case 5: return "recoverableTrustFailure"
+        case 6: return "fatalTrustFailure"
+        case 7: return "otherError"
+        default: return "invalid"
+        }
+    }
+
+    private static func cap(_ text: String) -> String {
+        if text.count <= 1800 { return text }
+        return String(text.prefix(1800)) + "…"
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {

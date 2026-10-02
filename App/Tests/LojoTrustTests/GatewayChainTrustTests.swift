@@ -34,8 +34,65 @@ final class GatewayChainTrustTests: XCTestCase {
         XCTAssertTrue(ca.isCA)
         XCTAssertTrue(ca.basicConstraintsCritical)
         XCTAssertEqual(ca.pathLen, 0)
+        XCTAssertTrue(leaf.hasAuthorityKeyIdentifier)
+        XCTAssertTrue(leaf.hasSubjectKeyIdentifier)
+        XCTAssertFalse(ca.hasAuthorityKeyIdentifier)
+        XCTAssertTrue(ca.hasSubjectKeyIdentifier)
         XCTAssertEqual(leaf.notAfter.timeIntervalSince(leaf.notBefore), 397 * 86_400, accuracy: 1)
         try fixture.assertOpenSSLVerifiesLeaf()
+    }
+
+    func testSHA256MatchesOpenSSL() throws {
+        XCTAssertEqual(DigestSHA256.hex(Data()), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        XCTAssertEqual(DigestSHA256.hex(Data("abc".utf8)), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        XCTAssertEqual(DigestSHA256.hex(fixture.ca), try fixture.sha256Hex(fixture.ca))
+    }
+
+    func testExplicitPinAcceptsTheOverlayChain() throws {
+        let now = try insideValidity()
+        let hash = DigestSHA256.hex(fixture.ca)
+        let decision = GatewayChainTrust.explicitPin(chainDERs: [fixture.leaf, fixture.ca], pinnedSHA256: hash, host: "100.96.1.18", now: now)
+        guard case .ready(let caDER, let signature) = decision else {
+            return XCTFail("overlay chain rejected: \(decision)")
+        }
+        XCTAssertEqual(caDER, fixture.ca)
+        XCTAssertEqual(signature.algorithmOID, CertificateDER.ecdsaWithSHA256)
+        XCTAssertTrue(try fixture.signatureVerifies(signature))
+    }
+
+    func testTamperedLeafSignatureDoesNotVerify() throws {
+        let material = try XCTUnwrap(CertificateDER.signatureMaterial(fixture.leaf))
+        XCTAssertTrue(try fixture.signatureVerifies(material))
+        guard let range = fixture.leaf.range(of: material.signature), material.signature.count > 8 else {
+            return XCTFail("signature bytes were not found in the leaf")
+        }
+        var tampered = fixture.leaf
+        tampered[range.startIndex + 4] ^= 0xff
+        let bad = try XCTUnwrap(CertificateDER.signatureMaterial(tampered))
+        XCTAssertFalse(try fixture.signatureVerifies(bad))
+    }
+
+    func testExplicitPinRejectsADifferentCAAndNamesThePresentedFingerprints() throws {
+        let now = try insideValidity()
+        let wrong = DigestSHA256.hex(fixture.otherCA)
+        let decision = GatewayChainTrust.explicitPin(chainDERs: [fixture.leaf, fixture.ca], pinnedSHA256: wrong, host: "100.96.1.18", now: now)
+        guard case .rejected(let rejection) = decision else { return XCTFail("accepted a different CA") }
+        XCTAssertEqual(rejection.code, .pinMismatch)
+        XCTAssertTrue(rejection.message.contains("Presented:"))
+        XCTAssertTrue(rejection.message.contains(DigestSHA256.hex(fixture.ca)))
+        XCTAssertTrue(rejection.message.contains(DigestSHA256.hex(fixture.leaf)))
+    }
+
+    func testExplicitPinRejectsAnIntermediateUnderPathLenZero() throws {
+        let now = try insideValidity()
+        let decision = GatewayChainTrust.explicitPin(
+            chainDERs: [fixture.leaf, fixture.otherCA, fixture.ca],
+            pinnedSHA256: DigestSHA256.hex(fixture.ca),
+            host: "100.96.1.18",
+            now: now
+        )
+        guard case .rejected(let rejection) = decision else { return XCTFail("pathlen 0 accepted an intermediate") }
+        XCTAssertEqual(rejection.code, .pathLength)
     }
 
     func testOverlayAndLANAddressesAreTrustedUnderPathLenZero() throws {
@@ -150,6 +207,24 @@ private struct GatewayCertFixture {
         try Self.openssl(directory, ["verify", "-CAfile", "ca.crt", "leaf.crt"])
     }
 
+    func sha256Hex(_ der: Data) throws -> String {
+        let url = directory.appendingPathComponent("hash.in")
+        try der.write(to: url)
+        let text = try Self.opensslText(directory, ["dgst", "-sha256", url.lastPathComponent])
+        let hex = text.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+        guard hex.count == 64 else {
+            throw NSError(domain: "openssl", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+        }
+        return hex
+    }
+
+    func signatureVerifies(_ material: CertificateSignature) throws -> Bool {
+        try material.signedBytes.write(to: directory.appendingPathComponent("tbs.bin"))
+        try material.signature.write(to: directory.appendingPathComponent("sig.bin"))
+        _ = try? Self.opensslText(directory, ["x509", "-in", "ca.crt", "-pubkey", "-noout", "-out", "ca.pub"])
+        return Self.opensslStatus(directory, ["dgst", "-sha256", "-verify", "ca.pub", "-signature", "sig.bin", "tbs.bin"]) == 0
+    }
+
     private static func der(_ pem: URL, directory: URL) throws -> Data {
         let out = directory.appendingPathComponent(pem.lastPathComponent + ".der")
         try openssl(directory, ["x509", "-in", pem.lastPathComponent, "-outform", "DER", "-out", out.lastPathComponent])
@@ -157,6 +232,25 @@ private struct GatewayCertFixture {
     }
 
     private static func openssl(_ directory: URL, _ arguments: [String]) throws {
+        let result = try run(directory, arguments)
+        guard result.status == 0 else {
+            throw NSError(domain: "openssl", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: "openssl \(arguments.joined(separator: " "))\n\(result.err)\n\(result.out)"])
+        }
+    }
+
+    private static func opensslText(_ directory: URL, _ arguments: [String]) throws -> String {
+        let result = try run(directory, arguments)
+        guard result.status == 0 else {
+            throw NSError(domain: "openssl", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: "openssl \(arguments.joined(separator: " "))\n\(result.err)\n\(result.out)"])
+        }
+        return result.out
+    }
+
+    private static func opensslStatus(_ directory: URL, _ arguments: [String]) -> Int32 {
+        (try? run(directory, arguments).status) ?? 1
+    }
+
+    private static func run(_ directory: URL, _ arguments: [String]) throws -> (status: Int32, out: String, err: String) {
         let process = Process()
         process.currentDirectoryURL = directory
         process.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
@@ -167,10 +261,9 @@ private struct GatewayCertFixture {
         process.standardError = stderr
         try process.run()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let text = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw NSError(domain: "openssl", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "openssl \(arguments.joined(separator: " "))\n\(text)"])
-        }
+        let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, out, err)
     }
 
     private static func write(_ text: String, to url: URL) throws {

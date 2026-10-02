@@ -8,8 +8,8 @@ public enum ServerTrustChallenge {
     public static let taskSelector = "URLSession:task:didReceiveChallenge:completionHandler:"
 }
 
-/// Fields the phone checks itself on a gateway certificate. Signature verification stays with
-/// SecTrust; this covers the name and path-length rules SecTrust gets wrong for this profile.
+/// Fields the phone checks itself on a gateway certificate. The cryptographic signature is
+/// checked with SecKey on the phone; this covers name, dates, and path length.
 public struct ParsedCertificate: Equatable, Sendable {
     public var notBefore: Date
     public var notAfter: Date
@@ -20,6 +20,8 @@ public struct ParsedCertificate: Equatable, Sendable {
     public var dnsNames: [String]
     public var ipAddresses: [String]
     public var extendedKeyUsageOIDs: [String]
+    public var hasAuthorityKeyIdentifier: Bool
+    public var hasSubjectKeyIdentifier: Bool
 
     public var hasServerAuth: Bool {
         extendedKeyUsageOIDs.contains(CertificateDER.serverAuthOID)
@@ -34,7 +36,9 @@ public struct ParsedCertificate: Equatable, Sendable {
         basicConstraintsCritical: Bool,
         dnsNames: [String],
         ipAddresses: [String],
-        extendedKeyUsageOIDs: [String]
+        extendedKeyUsageOIDs: [String],
+        hasAuthorityKeyIdentifier: Bool = false,
+        hasSubjectKeyIdentifier: Bool = false
     ) {
         self.notBefore = notBefore
         self.notAfter = notAfter
@@ -45,7 +49,38 @@ public struct ParsedCertificate: Equatable, Sendable {
         self.dnsNames = dnsNames
         self.ipAddresses = ipAddresses
         self.extendedKeyUsageOIDs = extendedKeyUsageOIDs
+        self.hasAuthorityKeyIdentifier = hasAuthorityKeyIdentifier
+        self.hasSubjectKeyIdentifier = hasSubjectKeyIdentifier
     }
+}
+
+/// The bytes SecKeyVerifySignature needs: the DER tbsCertificate and the ECDSA signature value.
+public struct CertificateSignature: Equatable, Sendable {
+    public var algorithmOID: String
+    /// DER encoding of tbsCertificate, which is the message that was signed.
+    public var signedBytes: Data
+    /// Contents of the signature BIT STRING (DER SEQUENCE of r and s), without the unused-bits byte.
+    public var signature: Data
+}
+
+/// A chain is ready for SecKey verification, or it was rejected before that.
+public enum ExplicitPin: Equatable, Sendable {
+    case ready(caDER: Data, signature: CertificateSignature)
+    case rejected(PinRejection)
+}
+
+public struct PinRejection: Equatable, Sendable {
+    public enum Code: Equatable, Sendable {
+        case pinMismatch
+        case hostname
+        case expired
+        case pathLength
+        case notServer
+        case malformed
+    }
+
+    public var code: Code
+    public var message: String
 }
 
 public enum CertificateDER {
@@ -54,6 +89,8 @@ public enum CertificateDER {
     private static let subjectAltName = "2.5.29.17"
     private static let basicConstraints = "2.5.29.19"
     private static let extKeyUsage = "2.5.29.37"
+    private static let authorityKeyIdentifier = "2.5.29.35"
+    private static let subjectKeyIdentifier = "2.5.29.14"
 
     public static func parse(_ der: Data) -> ParsedCertificate? {
         var reader = DERReader(der)
@@ -75,6 +112,8 @@ public enum CertificateDER {
         var pathLen: Int?
         var bcCritical = false
         var sawBC = false
+        var hasAKI = false
+        var hasSKI = false
 
         while let field = tbs.readTLV() {
             guard field.tag == 0xA3 else { continue }
@@ -94,6 +133,10 @@ public enum CertificateDER {
                 case extKeyUsage:
                     guard let ids = parseEKU(ext.value) else { return nil }
                     ekus = ids
+                case authorityKeyIdentifier:
+                    hasAKI = true
+                case subjectKeyIdentifier:
+                    hasSKI = true
                 default:
                     break
                 }
@@ -109,8 +152,26 @@ public enum CertificateDER {
             basicConstraintsCritical: bcCritical,
             dnsNames: dns,
             ipAddresses: ips,
-            extendedKeyUsageOIDs: ekus
+            extendedKeyUsageOIDs: ekus,
+            hasAuthorityKeyIdentifier: hasAKI,
+            hasSubjectKeyIdentifier: hasSKI
         )
+    }
+
+    /// IP hosts are matched only against iPAddress SANs. `SecPolicyCreateSSL(true, ip)` can still
+    /// treat that literal as a DNS name and return a hostname mismatch.
+    public static func isIPHost(_ host: String) -> Bool {
+        canonicalIPv4(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) != nil
+    }
+
+    public static func signatureMaterial(_ der: Data) -> CertificateSignature? {
+        var reader = DERReader(der)
+        guard let cert = reader.readRawTLV(), cert.tag == 0x30 else { return nil }
+        var outer = DERReader(cert.body)
+        guard let tbs = outer.readRawTLV(), tbs.tag == 0x30 else { return nil }
+        guard let algorithm = outer.readRawTLV(), algorithm.tag == 0x30, let oid = oid(in: algorithm.body) else { return nil }
+        guard let bits = outer.readRawTLV(), bits.tag == 0x03, let payload = bitStringPayload(bits.body) else { return nil }
+        return CertificateSignature(algorithmOID: oid, signedBytes: tbs.full, signature: payload)
     }
 
     /// IP hosts are matched only against iPAddress SANs. A dotted address is not a DNS name,
@@ -246,6 +307,11 @@ public enum CertificateDER {
         return oids
     }
 
+    private static func bitStringPayload(_ body: Data) -> Data? {
+        guard let unused = body.first, unused == 0, body.count > 1 else { return nil }
+        return body.dropFirst()
+    }
+
     private static func oid(in algorithm: Data) -> String? {
         var reader = DERReader(algorithm)
         guard let field = reader.readTLV(), field.tag == 0x06 else { return nil }
@@ -334,6 +400,94 @@ public enum GatewayChainTrust {
         }
         return .trusted
     }
+
+    /// Accept a chain only when it contains the pinned CA and the leaf's name, dates, and path
+    /// length are valid. The caller still has to verify `signature` with that CA's key.
+    public static func explicitPin(chainDERs: [Data], pinnedSHA256: String, host: String, now: Date = Date()) -> ExplicitPin {
+        let pinned = pinnedSHA256.lowercased()
+        guard pinned.count == 64, pinned.allSatisfy(\.isHexDigit) else {
+            return .rejected(PinRejection(code: .malformed, message: "The pinned CA fingerprint is not 64 hex characters."))
+        }
+        guard let leafDER = chainDERs.first else {
+            return .rejected(PinRejection(code: .malformed, message: "The server sent no certificate."))
+        }
+        let presented = chainDERs.map { DigestSHA256.hex($0) }
+        guard let caIndex = presented.firstIndex(of: pinned) else {
+            let list = presented.isEmpty ? "none" : presented.joined(separator: ", ")
+            return .rejected(PinRejection(
+                code: .pinMismatch,
+                message: "No certificate in the server chain has SHA-256 \(pinned). Presented: \(list)."
+            ))
+        }
+        let caDER = chainDERs[caIndex]
+        guard let leaf = CertificateDER.parse(leafDER) else {
+            return .rejected(PinRejection(code: .malformed, message: "The leaf certificate could not be parsed."))
+        }
+        guard let ca = CertificateDER.parse(caDER) else {
+            return .rejected(PinRejection(code: .malformed, message: "The pinned certificate could not be parsed."))
+        }
+        let intermediates = chainDERs.enumerated().compactMap { index, der -> Data? in
+            guard index != 0, index != caIndex else { return nil }
+            return der
+        }
+        let verdict = evaluate(leafDER: leafDER, intermediateDERs: intermediates, caDER: caDER, host: host, now: now)
+        if let rejection = rejection(verdict, host: host, leaf: leaf, ca: ca, now: now) {
+            return .rejected(rejection)
+        }
+        guard let signature = CertificateDER.signatureMaterial(leafDER) else {
+            return .rejected(PinRejection(code: .malformed, message: "The leaf signature could not be read."))
+        }
+        guard signature.algorithmOID == CertificateDER.ecdsaWithSHA256 else {
+            return .rejected(PinRejection(
+                code: .malformed,
+                message: "The leaf is signed with \(signature.algorithmOID), not ecdsa-with-SHA256 (\(CertificateDER.ecdsaWithSHA256))."
+            ))
+        }
+        return .ready(caDER: caDER, signature: signature)
+    }
+
+    private static func rejection(_ verdict: Verdict, host: String, leaf: ParsedCertificate, ca: ParsedCertificate, now: Date) -> PinRejection? {
+        switch verdict {
+        case .trusted:
+            return nil
+        case .hostnameMismatch:
+            let ips = leaf.ipAddresses.isEmpty ? "none" : leaf.ipAddresses.joined(separator: ", ")
+            let dns = leaf.dnsNames.isEmpty ? "none" : leaf.dnsNames.joined(separator: ", ")
+            return PinRejection(
+                code: .hostname,
+                message: "The leaf SAN does not include \(host). IP SANs: \(ips). DNS SANs: \(dns). An IP host is matched only against iPAddress SANs."
+            )
+        case .expired:
+            return PinRejection(
+                code: .expired,
+                message: "The leaf is outside its validity window at \(stamp(now)). notBefore \(stamp(leaf.notBefore)), notAfter \(stamp(leaf.notAfter))."
+            )
+        case .pathLength:
+            let limit = ca.pathLen.map(String.init) ?? "none"
+            return PinRejection(
+                code: .pathLength,
+                message: "The pinned CA has pathlen \(limit) and the chain includes an intermediate CA. pathlen 0 allows the leaf directly under that CA, not another CA in between."
+            )
+        case .notServer:
+            let eku = leaf.extendedKeyUsageOIDs.isEmpty ? "none" : leaf.extendedKeyUsageOIDs.joined(separator: ", ")
+            return PinRejection(
+                code: .notServer,
+                message: "The leaf is not a TLS server certificate (CA: \(leaf.isCA), EKU: \(eku))."
+            )
+        case .malformed:
+            return PinRejection(
+                code: .malformed,
+                message: "The pinned certificate is not a CA (CA: \(ca.isCA)), or the chain could not be parsed."
+            )
+        }
+    }
+
+    private static func stamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
 }
 
 private struct DERReader {
@@ -356,6 +510,12 @@ private struct DERReader {
         let body = data.subdata(in: index..<(index + length))
         index += length
         return (tag, body)
+    }
+
+    mutating func readRawTLV() -> (tag: UInt8, body: Data, full: Data)? {
+        let start = index
+        guard let tlv = readTLV() else { return nil }
+        return (tlv.tag, tlv.body, data.subdata(in: start..<index))
     }
 
     private mutating func readLength() -> Int? {

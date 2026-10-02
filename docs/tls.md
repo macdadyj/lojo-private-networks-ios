@@ -21,15 +21,20 @@ the VPN, without breaking the existing HTTP clients (the old Ranch Field app, de
   stand in, and a leaf rotation needs nothing on the phone. The CA certificate (public) is stored
   as a Keychain item, `AfterFirstUnlockThisDeviceOnly`, in this app's default access group
   (the team prefix plus the bundle id). The service name is `<bundle id>.siteCA`.
-- **URLSession only honors the completion-handler challenge method**
-  (`URLSession:didReceiveChallenge:completionHandler:`). The async Swift method is not invoked
-  for a session delegate, so an implementation of only that method never pins anything: iOS
-  applies default trust, the phone aborts, and the gateway logs `ECONNRESET` /
-  `errSSLFatalAlert (-9802)`. IP addresses are matched against iPAddress SANs, not as DNS names.
-  A CA with `pathlen:0` is allowed to sign the leaf directly (no intermediate).
+- **HTTPS uses a Network.framework verify block, not the system trust store.** The connection
+  is accepted only when some certificate in the server chain has the pinned CA's SHA-256, `SecKey`
+  verifies the leaf was signed by that CA (`ecdsa-with-SHA256`), and the leaf's dates and SAN
+  match the host. `SecTrustEvaluateWithError` does not get to abort that handshake: with a custom
+  anchor, `SecPolicyCreateSSL(true, ip)` can still treat an IP as a DNS name, and a failure there
+  used to become `errSSLFatalAlert (-9802)` with no SecTrust text. A refusal now includes the
+  explicit-pin reason plus each SecTrust attempt (`SSL(host)`, `SSL` with no hostname, Basic
+  X.509, and leaf-only) with the CFError domain, code, description, trust result, and per-certificate
+  property errors. A CA with `pathlen:0` may sign the leaf directly. A missing authority-key
+  identifier is not a reason to refuse when the signature verifies. The 398-day limit applies to
+  system-trusted leaves; this CA is not one, and the leaf is 397 days anyway.
   Host-side checks for that profile live in `tools/tls-trust` (`swift test`). They generate a
   CA and leaf with the same shape as `gateway-tls.sh` (pathlen:0, 397-day leaf, the site's IP
-  and DNS SANs). Signature verification stays on the phone with `SecTrust`.
+  and DNS SANs) and check the bytes passed to `SecKeyVerifySignature` with OpenSSL.
 - **Pairing is a QR code.** `scripts/gateway-tls.sh pair` shows
   `lojo://pair?v=1&n=<site>&lan=https://…:8443&ov=https://…:8443&ca=<SHA-256 of the CA>`.
   The owner scans it with the iPhone **Camera** app ("Open in LOJO Networks"), or pastes it in
