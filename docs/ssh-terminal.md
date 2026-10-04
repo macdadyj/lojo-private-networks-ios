@@ -177,7 +177,7 @@ To finish, on each device as the login user, run the command from **Keys → LOJ
 
 ### 8.3 Persistent sessions (manual, real iPhone)
 
-Unit tests cover the reconnect state machine and the tmux command strings (`cd tools/terminal-persist && swift test`). GitHub Actions runs that on Linux and macOS (`.github/workflows/terminal-persist.yml`). There is no Xcode project or Simulator here, so those jobs do not capture Simulator screenshots. On a debug install, with addresses masked:
+Unit tests cover the reconnect state machine and the tmux command strings (`cd tools/terminal-persist && swift test`). GitHub Actions runs that on Linux and macOS (`.github/workflows/terminal-persist.yml`). The same workflow builds the app for the iOS Simulator with `xcodebuild` (`App/project.yml`, generated in CI) and uploads screenshots of the reconnecting banner, the Keep sessions alive toggle, and the session list. Those launches set `LOJO_SSH_PREVIEW=1`, so the screens show **Demo host** (`100.64.0.2`) and do not seed the real host list. On a debug install, with addresses masked:
 
 ```bash
 LOJO_SSH_REDACT=1 scripts/phone-shot.sh /tmp/ssh-edit.png \

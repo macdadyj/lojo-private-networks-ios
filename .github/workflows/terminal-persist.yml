@@ -31,3 +31,19 @@ jobs:
       - name: Unit tests
         working-directory: tools/terminal-persist
         run: swift test
+
+  ios-simulator:
+    name: iOS Simulator build and screenshots
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and capture demo screens
+        run: bash scripts/ios-simulator-ci.sh
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-screenshots
+          path: .build/ios-simulator-shots/*.png
+          if-no-files-found: ignore

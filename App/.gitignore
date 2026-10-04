@@ -8,3 +8,4 @@ DerivedData/
 .swiftpm/
 .netrc
 /Vendor
+/LojoNetworks.xcodeproj

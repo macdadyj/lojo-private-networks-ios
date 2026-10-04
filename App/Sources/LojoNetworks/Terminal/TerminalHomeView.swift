@@ -162,7 +162,10 @@ struct TerminalHomeView: View {
 
     private func appear() {
         center.setOverlayProbe(store.overlayReachable)
-        hosts.seedDefaults(overlayGatewayURL: store.launch.overlayOverride ?? store.overlayAddress, gatewayPort: center.launch.gatewayPort)
+        // Preview launches (simulator screenshots) must not seed the real host list.
+        if !center.launch.preview {
+            hosts.seedDefaults(overlayGatewayURL: store.launch.overlayOverride ?? store.overlayAddress, gatewayPort: center.launch.gatewayPort)
+        }
         if center.canRefreshDirectory, center.directoryIsStale || (center.launch.refresh && !center.launchApplied) {
             Task { await center.refreshDirectory() }
         }
@@ -182,7 +185,15 @@ struct TerminalHomeView: View {
             let record = keys.keys.first { $0.kind == .secureEnclaveP256 } ?? keys.keys.first
             path = [.keys] + (record.map { [TerminalRoute.key($0.id)] } ?? [])
         case .settings: showSettings = true
-        case .edit: editing = center.launchHost().map { HostDraft(host: $0, isNew: false) }
+        case .edit:
+            if launch.preview {
+                editing = HostDraft(
+                    host: SSHHost(label: "Demo host", address: "100.64.0.2", port: 22, username: "owner", group: "Demo"),
+                    isNew: false
+                )
+            } else {
+                editing = center.launchHost().map { HostDraft(host: $0, isNew: false) }
+            }
         case .diag: diagnosing = center.launchHost()
         case .sessions:
             sessionsPreview = launch.preview

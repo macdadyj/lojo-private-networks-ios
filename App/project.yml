@@ -1,0 +1,86 @@
+# Generated into LojoNetworks.xcodeproj by XcodeGen during macOS CI.
+# xtool still builds the phone from Package.swift; this project exists so
+# `xcodebuild` can compile the same sources for the iOS Simulator.
+name: LojoNetworks
+options:
+  bundleIdPrefix: com.lojo
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGN_IDENTITY: ""
+    DEFINES_MODULE: YES
+packages:
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    from: 2.103.0
+  swift-nio-ssh:
+    url: https://github.com/apple/swift-nio-ssh.git
+    exactVersion: 0.15.0
+  swift-nio-transport-services:
+    url: https://github.com/apple/swift-nio-transport-services.git
+    from: 1.28.0
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto.git
+    from: 4.5.0
+  SwiftTerm:
+    path: Vendor/SwiftTerm
+targets:
+  LojoSSH:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/LojoSSH
+    dependencies:
+      - package: swift-nio
+        product: NIOConcurrencyHelpers
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio
+        product: NIOPosix
+      - package: swift-nio-ssh
+        product: NIOSSH
+      - package: swift-nio-transport-services
+        product: NIOTransportServices
+      - package: swift-crypto
+        product: Crypto
+  LojoTrust:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/LojoTrust
+  LojoNetworks:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/LojoNetworks
+    dependencies:
+      - target: LojoSSH
+      - target: LojoTrust
+      - package: swift-nio-ssh
+        product: NIOSSH
+      - package: swift-crypto
+        product: Crypto
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Info.plist
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.2"
+        ENABLE_PREVIEWS: NO
+schemes:
+  LojoNetworks:
+    build:
+      targets:
+        LojoNetworks: all
+    run:
+      config: Debug
