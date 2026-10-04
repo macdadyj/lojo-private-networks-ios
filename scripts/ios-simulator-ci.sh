@@ -23,21 +23,8 @@ if ! command -v xcodegen >/dev/null; then
 fi
 (cd "$APP" && xcodegen generate)
 
-xcodebuild \
-  -project "$APP/LojoNetworks.xcodeproj" \
-  -scheme LojoNetworks \
-  -configuration Debug \
-  -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath "$DERIVED" \
-  CODE_SIGNING_ALLOWED=NO \
-  build
-
-APP_PATH="$(find "$DERIVED" -type d -name 'LojoNetworks.app' -path '*iphonesimulator*' | head -1)"
-if [[ -z "$APP_PATH" ]]; then
-  echo "LojoNetworks.app was not produced" >&2
-  exit 1
-fi
-
+# A generic Simulator destination builds arm64 and x86_64. swift-atomics then
+# fails to emit `_AtomicsShims` for the extra slice. Pin one arm64 iPhone.
 DEVICE_LINE="$(xcrun simctl list devices available | grep -E 'iPhone' | head -1)"
 UDID="$(printf '%s\n' "$DEVICE_LINE" | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/')"
 if [[ -z "$UDID" || "$UDID" == "$DEVICE_LINE" ]]; then
@@ -45,6 +32,23 @@ if [[ -z "$UDID" || "$UDID" == "$DEVICE_LINE" ]]; then
   exit 1
 fi
 echo "Simulator $DEVICE_LINE"
+
+xcodebuild \
+  -project "$APP/LojoNetworks.xcodeproj" \
+  -scheme LojoNetworks \
+  -configuration Debug \
+  -destination "platform=iOS Simulator,id=$UDID" \
+  -derivedDataPath "$DERIVED" \
+  CODE_SIGNING_ALLOWED=NO \
+  ONLY_ACTIVE_ARCH=YES \
+  ARCHS=arm64 \
+  build
+
+APP_PATH="$(find "$DERIVED" -type d -name 'LojoNetworks.app' -path '*iphonesimulator*' | head -1)"
+if [[ -z "$APP_PATH" ]]; then
+  echo "LojoNetworks.app was not produced" >&2
+  exit 1
+fi
 
 xcrun simctl boot "$UDID" || true
 xcrun simctl bootstatus "$UDID" -b
