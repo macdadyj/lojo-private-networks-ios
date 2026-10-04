@@ -75,6 +75,18 @@ struct RootView: View {
                 await store.refresh(.timer)
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                terminal.noteScene(inBackground: true)
+            case .active:
+                terminal.noteScene(inBackground: false)
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
+        }
         .onAppear {
             let s = store
             watcher.start {

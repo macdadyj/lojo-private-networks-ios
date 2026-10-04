@@ -69,7 +69,7 @@ App/  (xtool app, bundle com.lojo.PrivateNetworks)
 └── Sources/LojoNetworks/Terminal   Terminal tab
       TerminalModels / HostStore    saved hosts and groups, gateway directory cache, known_hosts file
       SSHKeyStore                   Keychain + Secure Enclave keys, saved passwords
-      TerminalSession               one SSH session per tab: SwiftTerm view, keep-alive, reconnect, prompts
+      TerminalSession               one SSH session per tab: SwiftTerm view, tmux attach, keep-alive, reconnect, prompts
       TerminalCenter                open sessions, credentials, directory refresh, QA launch hooks
       TerminalHomeView              hosts list, sessions, gateway devices, VPN gate
       SessionScreen                 tab strip, session bar, host-key/password/changed-key screens, SwiftTerm bridge
@@ -97,7 +97,21 @@ SwiftTerm TerminalView ⇄ TerminalSession (@MainActor) ⇄ ShellChannel ⇄ NIO
 
 **Terminal ★.** SwiftTerm `TerminalView` in xterm-256color with PTY size tracking. The key bar has Esc, Ctrl (sticky), Tab, arrows, `~ | / -`, F1–F10 and a keyboard toggle. Long-press selects; Copy and Paste are in the edit menu and in the session toolbar. Font size runs 9–24 pt. Themes: LOJO Dark, Solarized Dark, Solarized Light, Classic Green.
 
-**Keep-alive and reconnect.** TCP keepalive (idle 30 s, interval 10 s, count 3) plus an SSH-level ping every 30 s. The ping is a `cancel-tcpip-forward` global request with want-reply, which OpenSSH must answer. Two missed pings drop the connection. An unexpected drop reconnects automatically (1, 2, 5, 10, 30 s backoff) while the app is active and the VPN is up, and also when the scene becomes active again. A clean shell exit shows "Session ended (exit N)" with a Reconnect button and no auto-reconnect. A reconnect starts a fresh shell (this isn't mosh); tmux on the host keeps work alive. iOS suspends sockets roughly 30 s after the app is backgrounded.
+**Keep-alive and reconnect.** TCP keepalive (idle 30 s, interval 10 s, count 3) plus an SSH-level ping every 30 s. The ping is a `cancel-tcpip-forward` global request with want-reply, which OpenSSH must answer. Two missed pings drop the connection. An unexpected drop reconnects automatically with exponential backoff (1, 2, 4, 8, 16, then 30 s, twelve attempts) while the VPN (or site Wi‑Fi, for a shop-LAN host) is up. A clean shell exit shows "Session ended (exit N)" with a Reconnect button and no auto-reconnect. Leaving the app does not close the tab. iOS still suspends sockets about 30 s after backgrounding; the app calls `beginBackgroundTask` so the socket can survive a short trip away, and on return it probes the socket and reattaches if the probe fails.
+
+**Sessions stay on the host (tmux).** Each host has **Keep sessions alive (tmux)**, default on (host editor, and the Terminal settings screen points at it). A tab's remote command is create-or-attach, the same idea as `tmux new-session -A -s lojo-<host>`:
+
+```sh
+tmux -L lojo has-session -t lojo-<host> || tmux -L lojo new-session -A -d -s lojo-<host> -x <cols> -y <rows>
+# history 50000, mouse off, status off, default-terminal xterm-256color, escape-time 10
+exec tmux -L lojo attach-session -t lojo-<host>
+```
+
+The socket name `lojo` is a private tmux server, so this does not change the options of any tmux the operator already uses. A second tab on the same host gets `lojo-<host>-2`. Reconnecting a tab attaches to the same name, so a long command (or a full-screen TUI) is still there. The PTY is `TERM=xterm-256color`. The tmux status line is off so a TUI gets the full height. **tmux mouse is off** unless the host editor turns it on: scrolling and copy stay in the phone's terminal (long-press to select, Copy in the bar). Keystrokes typed while the indicator says **Reconnecting…** are buffered and sent after the attach. The app does not wipe the on-screen scrollback when the socket drops.
+
+If `command -v tmux` fails, the tab is a normal shell, a one-line notice says the shell will end if the connection drops, and **Install command** shows `sudo apt-get install --no-install-recommends tmux`. Nothing is installed for you. **Sessions** (host context menu, host editor, and the stack button on a live tab) lists sessions on that socket and can attach or kill. Kill asks first and refuses a name that isn't a plain tmux session token.
+
+Wi‑Fi to cellular, and the VPN coming and going, are path changes: a live socket is probed, a dead one reattaches, and a missing path waits instead of burning attempts. The manual Reconnect button skips the wait.
 
 ## 6. Keys, passwords, known_hosts
 
@@ -134,7 +148,7 @@ Debug build installed with `deploy-phone.sh`, driven with the QA variables above
 - **Tabs and reconnect:** two concurrent sessions; killing their server-side processes shows "connection lost", then both reconnect about a second later with a "reconnected" banner.
 - **Clean exit:** `exit 0` ends the session with "Session ended (exit 0)" and no reconnect.
 - **VPN gate:** with the tunnel down, hosts are disabled and a forced connect is refused before any packet with "Turn on LOJO VPN".
-- **Not verified on the phone:** password auth (the test server is key-only, so the password prompt path is untested), OSC 52 clipboard prompt, a two-missed-ping drop (needs a network black hole rather than a clean close), iOS background/foreground resume, and import of a pasted private key (covered by the Linux smoke test's parser checks).
+- **Not verified on the phone:** password auth (the test server is key-only, so the password prompt path is untested), OSC 52 clipboard prompt, a two-missed-ping drop (needs a network black hole rather than a clean close), iOS background/foreground resume, and import of a pasted private key (covered by the Linux smoke test's parser checks). Background resume with tmux is the manual plan in §8.3; the reconnect state machine and the tmux command strings are unit-tested (`tools/terminal-persist`).
 
 ### 8.2 "Doesn't connect to devices" (2026-10-01)
 
@@ -160,6 +174,35 @@ Verified on the iPhone 11, debug build, LOJO VPN on (`utun7`). Each row is diagn
 | BlueBox `jon`:22 (via connector) | 72–82 ms | OpenSSH_7.9p1 Raspbian-10+deb10u1 | `SHA256:s/SUOjKQ5nXCtxFD24oj7z/ZehpEW3F6aHBpzo016Mc` | not tried |
 
 To finish, on each device as the login user, run the command from **Keys → LOJO iPhone → Copy authorize command** (or the same button on the denied card or in diagnostics). Then in the app: tap the host, check the fingerprint against the table, **Trust and connect**.
+
+### 8.3 Persistent sessions (manual, real iPhone)
+
+Unit tests cover the reconnect state machine and the tmux command strings (`cd tools/terminal-persist && swift test`). GitHub Actions runs that on Linux and macOS (`.github/workflows/terminal-persist.yml`). There is no Xcode project or Simulator here, so those jobs do not capture Simulator screenshots. On a debug install, with addresses masked:
+
+```bash
+LOJO_SSH_REDACT=1 scripts/phone-shot.sh /tmp/ssh-edit.png \
+  LOJO_SCREEN=terminal LOJO_SSH_SCREEN=edit
+LOJO_SSH_REDACT=1 LOJO_SSH_PREVIEW=1 scripts/phone-shot.sh /tmp/ssh-reconnecting.png \
+  LOJO_SCREEN=terminal LOJO_SSH_SCREEN=reconnecting
+LOJO_SSH_REDACT=1 LOJO_SSH_PREVIEW=1 scripts/phone-shot.sh /tmp/ssh-sessions.png \
+  LOJO_SCREEN=terminal LOJO_SSH_SCREEN=sessions
+```
+
+`edit` is the host editor with **Keep sessions alive (tmux)** (default on) and **Show install command**. `reconnecting` (debug, and only with `LOJO_SSH_PREVIEW=1`) shows the **Reconnecting…** indicator and the Reconnect button on a demo host, without dialing. `sessions` with `LOJO_SSH_PREVIEW=1` shows the sample session list (`lojo-demo-host`). Without the preview flag, Sessions talks to the real host. Do not commit shots that contain hostnames or addresses beyond the ones already in this doc.
+
+On the iPhone, LOJO VPN on, Terminal, connect to santacomputa (`jon`, port 2222) and trust the host key if asked:
+
+1. The session bar should read **Connected · kept on host**. On the host, `tmux -L lojo ls` shows `lojo-santacomputa`.
+2. In the terminal run `sleep 600; echo done`. Switch to another app for at least two minutes (longer than iOS keeps a background socket). Come back. A small **Reconnecting…** indicator may show, with a Reconnect button. The same `sleep` is still running, or `done` has printed. It must not be a fresh prompt that lost the command.
+3. Type a few characters while **Reconnecting…** is up. After it attaches, those characters must appear in the session.
+4. Turn Wi‑Fi off so the phone is on cellular with the VPN still up, then come back to the app. It reattaches to the same tmux session.
+5. Turn the VPN off. The tab waits instead of ending. Turn the VPN on. It attaches to the same session again.
+6. Run a full-screen TUI (for example `~/.grok/bin/grok`, grok CLI 1.0.46). The screen should fill, colors should render, long-press copy should still work, and scrolling should still scroll the terminal. Leave tmux mouse off for that. Leave the app and come back: the TUI should still be there, redrawn, not a new shell.
+7. Host editor: turn **Keep sessions alive (tmux)** off, reconnect, run `sleep 600; echo done`, and kill the SSH connection from the host side (`ss` or by toggling the VPN until the socket dies). The command is gone; that is the plain-shell fallback. Turn the setting back on.
+8. On a host with no tmux binary, the one-line notice appears and **Install command** shows `sudo apt-get install --no-install-recommends tmux`. Confirm the app does not run it.
+9. **Sessions**: attach a listed session, and kill one only after the confirmation. `tmux -L lojo ls` on the host agrees.
+
+Nothing in this flow changes host keys, Keychain items, or the overlay-only rule, and it does not send the install command or any secret.
 
 ## 9. Later: port forwarding (design only)
 

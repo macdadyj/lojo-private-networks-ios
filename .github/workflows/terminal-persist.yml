@@ -1,0 +1,33 @@
+name: Terminal persistence
+
+on:
+  push:
+    paths:
+      - "App/Sources/LojoSSH/**"
+      - "App/Sources/LojoNetworks/Terminal/**"
+      - "tools/terminal-persist/**"
+      - ".github/workflows/terminal-persist.yml"
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Reconnect and tmux tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            setup: true
+          - os: macos-15
+            setup: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift
+        if: matrix.setup
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0.3"
+      - name: Unit tests
+        working-directory: tools/terminal-persist
+        run: swift test

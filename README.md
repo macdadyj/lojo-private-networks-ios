@@ -30,9 +30,10 @@ and no Simulator; "run" means the physical phone.
 | `App/Sources/LojoNetworks/Demo` | Demo network "Juniper Mesa Ranch", procedurally drawn camera stills and site plan |
 | `App/Sources/LojoNetworks/Design` | Theme, cards, status dots, buttons, haptics, toasts |
 | `App/Sources/LojoSSH` | SSH core on apple/swift-nio-ssh: connection, auth, PTY shell, exec, keep-alive ping, known_hosts, overlay-only policy, key import. No UIKit, so `tools/ssh-smoke` builds it on Linux too |
-| `App/Sources/LojoNetworks/Terminal` | Terminal tab: saved hosts, gateway device list, Secure Enclave / Keychain keys, host-key checks, session tabs on SwiftTerm (pinned v1.11.2, fetched by `sync-app.sh`) |
+| `App/Sources/LojoNetworks/Terminal` | Terminal tab: saved hosts, gateway device list, Secure Enclave / Keychain keys, host-key checks, session tabs on SwiftTerm (pinned v1.11.2, fetched by `sync-app.sh`). Each tab attaches a named tmux session so the shell survives a dropped SSH connection |
 | `gateway/lojo-ssh-directory` | Read-only gateway script the Terminal tab runs over SSH to list LOJO devices and whether SSH is open |
 | `tools/ssh-smoke` | Linux smoke test for `LojoSSH` against a real OpenSSH (`scripts/test-sshd.sh smoke`) |
+| `tools/terminal-persist` | Unit tests for the reconnect state machine and tmux command strings (`swift test`). GitHub Actions runs them on Linux and macOS |
 | `sidecar/` | Site gateway `ranch-field-api` (Node 20). Source of truth for `~/.local/share/ranch-field-api/` |
 | `scripts/` | `deploy-phone.sh`, `sync-app.sh`, `phone-shot.sh`, `deploy-sidecar.sh`, `gateway-tls.sh` (site CA, server cert, rotation, pairing QR), `make-icon.py` |
 | `docs/` | Design doc, HTTPS design, screenshots |
@@ -213,12 +214,12 @@ scripts/phone-shot.sh OUT.png [KEY=VALUE ...]    # launches (kills existing) the
 |---|---|
 | `LOJO_DEMO` | `1` demo network, `0` live gateway (persisted) |
 | `LOJO_SCREEN` | `home`, `detail`, `activity`, `map`, `check`, `onboarding`, `setup`, `settings`, `terminal` |
-| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `key` (the Secure Enclave key with Copy authorize command), `settings`, `edit`, `diag` (diagnostics) |
+| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `key` (the Secure Enclave key with Copy authorize command), `settings`, `edit` (host editor, including Keep sessions alive), `diag` (diagnostics), `sessions`, `reconnecting` |
 | `LOJO_SSH_HOST` | host label for `edit` and `diag` (default `gateway`) |
 | `LOJO_SSH_CONNECT` | with `terminal`: host label to open a session to (`gateway` = the seeded site gateway) |
 | `LOJO_SSH_REDACT` | `1` masks IP addresses in the Terminal tab (use for every screenshot) |
 | `LOJO_SSH_REFRESH` | `1` pulls the gateway device list at launch even if the cached one is fresh |
-| `LOJO_SSH_RUN`, `LOJO_SSH_TRUST_FP`, `LOJO_SSH_GATEWAY_PORT`, `LOJO_SSH_ENSURE_KEY` | debug builds only; see [`docs/ssh-terminal.md`](docs/ssh-terminal.md) §8 |
+| `LOJO_SSH_RUN`, `LOJO_SSH_TRUST_FP`, `LOJO_SSH_GATEWAY_PORT`, `LOJO_SSH_ENSURE_KEY`, `LOJO_SSH_PREVIEW` | debug builds only; `LOJO_SSH_PREVIEW=1` fills the reconnecting indicator and the session list with sample data (no dial). See [`docs/ssh-terminal.md`](docs/ssh-terminal.md) §8 |
 | `LOJO_DEVICE` | key or name for `detail`, e.g. `north-gate`, `SantaWebcam` |
 | `LOJO_CONFIRM_GPIO` | pin; opens the GPIO confirmation sheet on `detail` (nothing is sent) |
 | `LOJO_SIMULATE_OFFLINE` | `1` routes both paths to unroutable TEST-NET addresses (real failure path) |

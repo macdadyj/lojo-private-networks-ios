@@ -64,7 +64,7 @@ private struct TabChip: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(session.phase.tint).frame(width: 7, height: 7)
-            Text(session.host.label)
+            Text(session.displayHost.label)
                 .font(.footnote.weight(selected ? .semibold : .regular))
                 .lineLimit(1)
             Button {
@@ -86,14 +86,18 @@ private struct SessionPane: View {
     @EnvironmentObject private var center: TerminalCenter
     @ObservedObject var session: TerminalSession
     @State private var flash: String?
+    @State private var showSessions = false
+    @State private var showInstall = false
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionBar(session: session, flash: $flash)
+            SessionBar(session: session, flash: $flash, onSessions: { showSessions = true })
             ZStack {
                 TerminalBridge(session: session)
                 overlay
             }
+            .overlay(alignment: .top) { linkBanner }
+            .overlay(alignment: .bottom) { tmuxNotice }
         }
         .overlay(alignment: .top) {
             if let flash {
@@ -107,6 +111,13 @@ private struct SessionPane: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: flash)
+        .sheet(isPresented: $showSessions) {
+            TmuxSessionsView(host: session.displayHost, previewRows: session.showsSampleSessions ? TmuxCommand.previewSessions : nil)
+                .environmentObject(center)
+        }
+        .sheet(isPresented: $showInstall) {
+            TmuxInstallSheet()
+        }
         .alert(
             "Copy from the remote host?",
             isPresented: Binding(get: { session.pendingClipboard != nil }, set: { if !$0 { session.acceptClipboard(false) } })
@@ -139,25 +150,118 @@ private struct SessionPane: View {
             EmptyView()
         }
     }
+
+    @ViewBuilder
+    private var linkBanner: some View {
+        switch session.phase {
+        case .reconnecting:
+            LinkBanner(
+                title: TmuxCommand.reconnectingTitle,
+                detail: reconnectDetail,
+                enabled: center.access(to: session.displayHost.address) == .open,
+                action: { session.reconnectNow() }
+            )
+        case .waitingForVPN:
+            LinkBanner(
+                title: session.statusLine,
+                detail: nil,
+                enabled: center.access(to: session.displayHost.address) == .open,
+                action: { session.reconnectNow() }
+            )
+        case .connecting, .awaitingHostKey, .awaitingPassword, .connected, .hostKeyChanged, .ended, .failed:
+            EmptyView()
+        }
+    }
+
+    private var reconnectDetail: String? {
+        if case .reconnecting(_, let delay) = session.phase, delay > 0 {
+            return "Trying again in \(delay) s"
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private var tmuxNotice: some View {
+        if let notice = session.tmuxNotice, !session.tmuxNoticeDismissed, session.phase == .connected {
+            HStack(spacing: 8) {
+                Text(notice.text)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Install command") { showInstall = true }
+                    .font(.caption.weight(.semibold))
+                Button {
+                    session.tmuxNoticeDismissed = true
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                }
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+}
+
+private struct LinkBanner: View {
+    let title: String
+    let detail: String?
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Reconnect", action: action)
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(LojoTheme.accent)
+                .disabled(!enabled)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .accessibilityLabel(title)
+    }
 }
 
 private struct SessionBar: View {
     @EnvironmentObject private var center: TerminalCenter
     @ObservedObject var session: TerminalSession
     @Binding var flash: String?
+    var onSessions: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("\(session.host.username)@\(AddressDisplay.text(session.host.address, redact: center.redact))")
+                Text("\(session.displayHost.username)@\(AddressDisplay.text(session.displayHost.address, redact: center.redact))")
                     .font(.caption.monospaced().weight(.semibold))
                     .lineLimit(1)
-                Text(session.phase.summary)
+                Text(session.statusLine)
                     .font(.caption2)
                     .foregroundStyle(session.phase == .connected ? Color.secondary : session.phase.tint)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
+            bar("square.stack", "Sessions on this host", action: onSessions)
             bar("doc.on.clipboard", "Paste") { session.paste() }
             bar("doc.on.doc", "Copy selection") {
                 show(session.copySelection() ? "Copied" : "Long-press to select text first")

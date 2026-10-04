@@ -183,6 +183,26 @@ public final class SSHConnection: Sendable {
         return ShellChannel(channel: child)
     }
 
+    /// PTY plus a remote command instead of a login shell. Used to attach tmux. `term` is the PTY
+    /// name the server reports (`xterm-256color`).
+    public func openCommand(
+        _ command: String,
+        term: String = "xterm-256color",
+        cols: Int,
+        rows: Int,
+        onOutput: @escaping @Sendable ([UInt8]) -> Void,
+        onExit: @escaping @Sendable (ShellExit) -> Void
+    ) async throws -> ShellChannel {
+        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+            wantReply: true, term: term,
+            terminalCharacterWidth: cols, terminalRowHeight: rows,
+            terminalPixelWidth: 0, terminalPixelHeight: 0,
+            terminalModes: SSHTerminalModes([:])
+        )
+        let child = try await openSession(mode: .command(pty, command), onOutput: onOutput, onExit: onExit)
+        return ShellChannel(channel: child)
+    }
+
     /// Runs one command without a PTY and returns its stdout (stderr is dropped).
     public func exec(_ command: String, maxBytes: Int = 1 << 20) async throws -> (output: Data, exit: ShellExit) {
         let collected = NIOLockedValueBox(Data())
@@ -442,6 +462,7 @@ private final class SessionHandler: ChannelInboundHandler {
     enum Mode {
         case shell(SSHChannelRequestEvent.PseudoTerminalRequest)
         case exec(String)
+        case command(SSHChannelRequestEvent.PseudoTerminalRequest, String)
     }
 
     private let mode: Mode
@@ -487,6 +508,10 @@ private final class SessionHandler: ChannelInboundHandler {
         case .exec(let command):
             pendingReplies = 1
             context.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true), promise: nil)
+        case .command(let pty, let command):
+            pendingReplies = 2
+            context.triggerUserOutboundEvent(pty, promise: nil)
+            context.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true), promise: nil)
         }
     }
 
@@ -507,7 +532,12 @@ private final class SessionHandler: ChannelInboundHandler {
             }
         case is ChannelFailureEvent:
             let what: String
-            if case .exec = mode { what = "the command" } else { what = pendingReplies == 2 ? "a terminal (pty)" : "a shell" }
+            switch mode {
+            case .exec, .command:
+                what = pendingReplies == 2 ? "a terminal (pty)" : "the command"
+            case .shell:
+                what = pendingReplies == 2 ? "a terminal (pty)" : "a shell"
+            }
             ready.fail(SSHClientError.channelRejected(what))
             context.close(promise: nil)
         case let status as SSHChannelRequestEvent.ExitStatus:

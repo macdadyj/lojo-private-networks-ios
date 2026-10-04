@@ -17,6 +17,8 @@ struct TerminalHomeView: View {
     @State private var editing: HostDraft?
     @State private var diagnosing: SSHHost?
     @State private var showSettings = false
+    @State private var sessionsHost: SSHHost?
+    @State private var sessionsPreview = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -40,7 +42,11 @@ struct TerminalHomeView: View {
                             HostRow(
                                 host: host,
                                 onEdit: { editing = HostDraft(host: host, isNew: false) },
-                                onDiagnose: { diagnosing = host }
+                                onDiagnose: { diagnosing = host },
+                                onSessions: {
+                                    sessionsPreview = false
+                                    sessionsHost = host
+                                }
                             )
                         }
                     }
@@ -95,6 +101,10 @@ struct TerminalHomeView: View {
             TerminalSettingsView()
                 .environmentObject(center)
         }
+        .sheet(item: $sessionsHost) { host in
+            TmuxSessionsView(host: host, previewRows: sessionsPreview ? TmuxCommand.previewSessions : nil)
+                .environmentObject(center)
+        }
         .fullScreenCover(isPresented: $center.showingSession) {
             SessionScreen()
                 .environmentObject(center)
@@ -106,7 +116,16 @@ struct TerminalHomeView: View {
             center.setOverlayProbe(up)
         }
         .onChange(of: scenePhase) { _, phase in
-            center.sceneChanged(active: phase == .active)
+            switch phase {
+            case .background:
+                center.noteScene(inBackground: true)
+            case .active:
+                center.noteScene(inBackground: false)
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
         }
     }
 
@@ -165,6 +184,17 @@ struct TerminalHomeView: View {
         case .settings: showSettings = true
         case .edit: editing = center.launchHost().map { HostDraft(host: $0, isNew: false) }
         case .diag: diagnosing = center.launchHost()
+        case .sessions:
+            sessionsPreview = launch.preview
+            if launch.preview {
+                sessionsHost = SSHHost(label: "Demo host", address: "100.64.0.2", port: 22, username: "owner", group: "Demo")
+            } else {
+                sessionsHost = center.launchHost()
+            }
+        case .reconnecting:
+            #if DEBUG
+            if launch.preview { center.openReconnectingPreview() }
+            #endif
         case .hosts, nil: break
         }
         for wanted in (launch.connect ?? "").lowercased().split(separator: ",").map(String.init) {
@@ -194,7 +224,7 @@ private struct SessionRow: View {
                 Circle().fill(session.phase.tint).frame(width: 9, height: 9)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.host.label).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text(session.phase.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(session.statusLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
@@ -212,6 +242,7 @@ private struct HostRow: View {
     let host: SSHHost
     let onEdit: () -> Void
     let onDiagnose: () -> Void
+    let onSessions: () -> Void
 
     private var trusted: Bool { !hosts.savedHostKeys(for: host).isEmpty }
     private var access: HostAccess { center.access(to: host.address) }
@@ -252,6 +283,7 @@ private struct HostRow: View {
         }
         .contextMenu {
             Button("Connect", systemImage: "terminal") { center.open(host) }
+            Button("Sessions", systemImage: "square.stack") { onSessions() }
             Button("Diagnose", systemImage: "stethoscope", action: onDiagnose)
             Button("Edit", systemImage: "pencil", action: onEdit)
         }

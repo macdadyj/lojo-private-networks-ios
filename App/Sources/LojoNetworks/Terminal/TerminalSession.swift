@@ -16,7 +16,20 @@ enum TerminalError: Error, CustomStringConvertible {
     }
 }
 
-/// One tab: a SwiftTerm view plus the SSH connection behind it, with keep-alive and reconnect.
+enum TmuxNotice: Equatable {
+    case missing
+    case unknown
+
+    var text: String {
+        switch self {
+        case .missing: return TmuxCommand.missingNotice
+        case .unknown: return TmuxCommand.unknownNotice
+        }
+    }
+}
+
+/// One tab: a SwiftTerm view plus the SSH connection behind it. With "Keep sessions alive" the
+/// remote command is tmux, so the shell keeps running on the host when this socket drops.
 /// SwiftTerm is only imported here and in nothing that also imports SwiftUI, because both
 /// define `Color`.
 @MainActor
@@ -33,8 +46,16 @@ final class TerminalSession: ObservableObject, Identifiable {
         case failed(String)
     }
 
+    enum RemoteShellKind: Equatable {
+        case unknown
+        case tmux
+        case plain
+    }
+
     let id = UUID()
     let host: SSHHost
+    /// Stable for the life of this tab, including reconnects. A second tab gets another name.
+    let tmuxSessionName: String
     @Published private(set) var phase: Phase = .connecting
     /// Why the last attempt failed, for the failure card's actions.
     @Published private(set) var failure: SSHClientError?
@@ -42,32 +63,55 @@ final class TerminalSession: ObservableObject, Identifiable {
     @Published private(set) var remoteTitle = ""
     /// Text a remote program asked to put on the clipboard (OSC 52), waiting for the owner's OK.
     @Published var pendingClipboard: String?
+    @Published private(set) var shellKind: RemoteShellKind = .unknown
+    /// Set when persistence was requested and tmux could not be used. The install command is never run.
+    @Published private(set) var tmuxNotice: TmuxNotice?
+    @Published var tmuxNoticeDismissed = false
 
     var hostView: UIView { terminalView }
     var isLive: Bool { phase == .connected }
+    /// Latest saved host, so the persistence toggle applies on the next attach.
+    var displayHost: SSHHost { center.hosts.hosts.first { $0.id == host.id } ?? host }
+
+    var statusLine: String {
+        switch phase {
+        case .connected:
+            return shellKind == .tmux ? TmuxCommand.keptOnHostStatus : "Connected"
+        case .waitingForVPN:
+            if center.access(to: displayHost.address) == .needsSiteWiFi { return "Needs site Wi‑Fi" }
+            return phase.summary
+        default:
+            return phase.summary
+        }
+    }
 
     private unowned let center: TerminalCenter
     private let terminalView: TerminalView
     private var connection: SSHConnection?
     private var shell: ShellChannel?
     private var runTask: Task<Void, Never>?
+    private var waitTask: Task<Void, Never>?
+    private var probeTask: Task<Void, Never>?
     private var keepAlive: Task<Void, Never>?
     private var hostKeyReply: CheckedContinuation<Bool, Never>?
     private var passwordReply: CheckedContinuation<String?, Never>?
     private var passwordToSave: String?
     private var userClosed = false
     private var hasConnected = false
-    private var pingDropped = false
+    private var previewOnly = false
+    var showsSampleSessions: Bool { previewOnly }
     /// Bumped whenever a connection is replaced, so callbacks from an old one are ignored.
-    private var link = 0
+    private var generation = 0
+    /// Bumped when a new dial starts, so a slow older dial cannot publish success.
+    private var attemptID = 0
     private var pendingCommand: String?
+    private var linkMachine = SessionLinkMachine()
+    private var inputBuffer = TerminalInputBuffer()
 
-    private static let backoff = [1, 2, 5, 10, 30]
-    private static let maxReconnectAttempts = 12
-
-    init(host: SSHHost, center: TerminalCenter, command: String? = nil) {
+    init(host: SSHHost, center: TerminalCenter, command: String? = nil, tmuxSessionName: String) {
         self.host = host
         self.center = center
+        self.tmuxSessionName = tmuxSessionName
         pendingCommand = command
         terminalView = TerminalView(
             frame: CGRect(x: 0, y: 0, width: 390, height: 600),
@@ -78,48 +122,148 @@ final class TerminalSession: ObservableObject, Identifiable {
         apply(theme: center.theme, fontSize: center.fontSize)
     }
 
+    #if DEBUG
+    /// Screenshot hook: show the reconnecting indicator without opening a socket.
+    func parkReconnectingPreview() {
+        previewOnly = true
+        shellKind = .tmux
+        phase = .reconnecting(attempt: 2, delay: 4)
+    }
+    #endif
+
     // MARK: Lifecycle
 
     func connect() {
+        reconnectNow()
+    }
+
+    func reconnectNow() {
+        guard !previewOnly else { return }
         userClosed = false
-        runTask?.cancel()
-        teardown()
         failure = nil
-        phase = .connecting
-        runTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.establish()
-            } catch {
-                self.failed(error)
-            }
-        }
+        if case .ended = phase { phase = .connecting }
+        if case .failed = phase { phase = .connecting }
+        if case .hostKeyChanged = phase { return }
+        apply(linkMachine.handle(.userReconnect))
     }
 
     func close() {
         userClosed = true
+        attemptID += 1
         runTask?.cancel()
         hostKeyReply?.resume(returning: false)
         hostKeyReply = nil
         passwordReply?.resume(returning: nil)
         passwordReply = nil
-        teardown()
+        inputBuffer.clear()
+        apply(linkMachine.handle(.userClose))
     }
 
-    /// Called when the app becomes active again: sockets may have died while suspended.
-    func resumeIfDropped() {
-        guard !userClosed else { return }
-        if phase == .connected, connection?.isActive != true {
-            dropped(nil)
-        } else if case .reconnecting = phase {
-            startReconnecting()
-        } else if phase == .waitingForVPN {
-            startReconnecting()
+    func sceneDidBackground() {
+        guard !previewOnly else { return }
+        apply(linkMachine.handle(.sceneBackground))
+    }
+
+    func sceneDidForeground() {
+        guard !previewOnly else { return }
+        if center.access(to: displayHost.address) != .open {
+            apply(linkMachine.handle(.pathUnavailable))
+            apply(linkMachine.handle(.sceneForeground))
+        } else {
+            apply(linkMachine.handle(.sceneForeground))
+            if case .waitingForPath = linkMachine.state {
+                apply(linkMachine.handle(.pathAvailable))
+            }
         }
     }
 
-    private func establish() async throws {
-        switch center.access(to: host.address) {
+    func networkChanged() {
+        guard !previewOnly else { return }
+        switch phase {
+        case .awaitingHostKey, .awaitingPassword, .hostKeyChanged:
+            return
+        default:
+            break
+        }
+        switch center.access(to: displayHost.address) {
+        case .open:
+            switch linkMachine.state {
+            case .waitingForPath, .failed:
+                apply(linkMachine.handle(.pathAvailable))
+            case .connecting, .live, .backoff, .ended:
+                apply(linkMachine.handle(.networkChanged))
+            }
+        case .needsOverlay, .needsSiteWiFi:
+            apply(linkMachine.handle(.pathUnavailable))
+        }
+    }
+
+    private func apply(_ effects: [SessionLinkMachine.Effect]) {
+        for effect in effects {
+            switch effect {
+            case .openSocket:
+                switch phase {
+                case .awaitingHostKey, .awaitingPassword, .hostKeyChanged:
+                    break
+                default:
+                    startEstablish()
+                }
+            case .closeSocket:
+                attemptID += 1
+                runTask?.cancel()
+                teardownSocket()
+            case .scheduleWait(let seconds):
+                waitTask?.cancel()
+                waitTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(seconds))
+                    guard let self, !Task.isCancelled else { return }
+                    self.apply(self.linkMachine.handle(.waitElapsed))
+                }
+            case .cancelWait:
+                waitTask?.cancel()
+                waitTask = nil
+            case .beginBackgroundTask:
+                center.noteBackground(begin: true)
+            case .endBackgroundTask:
+                center.noteBackground(begin: false)
+            case .flushInput:
+                hasConnected = true
+                let term = terminalView.getTerminal()
+                shell?.resize(
+                    cols: TmuxCommand.clampDimension(term.cols, fallback: 80),
+                    rows: TmuxCommand.clampDimension(term.rows, fallback: 24)
+                )
+                let typed = inputBuffer.drain()
+                if !typed.isEmpty { shell?.send(typed) }
+            case .probeSocket:
+                startProbe()
+            }
+        }
+        publishPhase()
+    }
+
+    private func startEstablish() {
+        attemptID += 1
+        let attempt = attemptID
+        runTask?.cancel()
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.establish(attempt: attempt)
+                guard self.attemptID == attempt, !Task.isCancelled, !self.userClosed else { return }
+                self.apply(self.linkMachine.handle(.connectSucceeded))
+                self.startKeepAlive()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.attemptID == attempt, !Task.isCancelled, !self.userClosed else { return }
+                self.handleEstablishError(error)
+            }
+        }
+    }
+
+    private func establish(attempt: Int) async throws {
+        switch center.access(to: displayHost.address) {
         case .open:
             break
         case .needsOverlay:
@@ -127,11 +271,13 @@ final class TerminalSession: ObservableObject, Identifiable {
         case .needsSiteWiFi:
             throw TerminalError.needsSiteWiFi
         }
+        let saved = displayHost
         let policy = center.hosts.policy
-        let name = host.address
+        let name = saved.address
         let address = try await Task.detached { try policy.resolve(name) }.value
-        let target = SSHTarget(address: address, port: host.port, username: host.username)
-        let credentials = center.credentials(for: host)
+        guard attempt == attemptID else { throw CancellationError() }
+        let target = SSHTarget(address: address, port: saved.port, username: saved.username)
+        let credentials = center.credentials(for: saved)
         try Task.checkCancellation()
 
         let conn = try await SSHConnection.connect(
@@ -140,30 +286,55 @@ final class TerminalSession: ObservableObject, Identifiable {
             passwordPrompt: { [weak self] in await self?.askPassword() },
             verifyHostKey: { [weak self] key in await self?.verify(key) ?? false }
         )
-        guard !Task.isCancelled, !userClosed else {
+        guard attempt == attemptID, !Task.isCancelled, !userClosed else {
             conn.close()
             throw CancellationError()
         }
 
-        link += 1
-        let token = link
         let term = terminalView.getTerminal()
+        let cols = TmuxCommand.clampDimension(term.cols, fallback: 80)
+        let rows = TmuxCommand.clampDimension(term.rows, fallback: 24)
+        let kind = try await remoteKind(on: conn, host: saved, attempt: attempt)
+
+        generation += 1
+        let token = generation
         let channel: ShellChannel
         do {
-            channel = try await conn.openShell(
-                cols: term.cols, rows: term.rows,
-                onOutput: { [weak self] bytes in
-                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(bytes, token: token) } }
-                },
-                onExit: { [weak self] exit in
-                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.shellExited(exit, token: token) } }
-                }
-            )
+            switch kind {
+            case .tmux:
+                let attach = TmuxAttach(
+                    session: tmuxSessionName, columns: cols, rows: rows, mouse: saved.tmuxMouse
+                )
+                channel = try await conn.openCommand(
+                    attach.execCommand, term: TmuxCommand.term, cols: cols, rows: rows,
+                    onOutput: { [weak self] bytes in
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(bytes, token: token) } }
+                    },
+                    onExit: { [weak self] exit in
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.shellExited(exit, token: token) } }
+                    }
+                )
+                shellKind = .tmux
+                tmuxNotice = nil
+            case .plain(let notice):
+                channel = try await conn.openShell(
+                    term: TmuxCommand.term, cols: cols, rows: rows,
+                    onOutput: { [weak self] bytes in
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(bytes, token: token) } }
+                    },
+                    onExit: { [weak self] exit in
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.shellExited(exit, token: token) } }
+                    }
+                )
+                shellKind = .plain
+                if tmuxNotice != notice { tmuxNoticeDismissed = false }
+                tmuxNotice = notice
+            }
         } catch {
             conn.close()
             throw error
         }
-        guard token == link, !userClosed else {
+        guard token == generation, attempt == attemptID, !userClosed else {
             channel.close()
             conn.close()
             throw CancellationError()
@@ -171,28 +342,67 @@ final class TerminalSession: ObservableObject, Identifiable {
 
         connection = conn
         shell = channel
-        pingDropped = false
         conn.onClose { [weak self] reason in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.connectionClosed(reason, token: token) } }
         }
-        if hasConnected {
-            banner("reconnected \(Self.clock.string(from: Date()))", color: 32)
-        }
-        hasConnected = true
-        phase = .connected
         if terminalView.window != nil { focus() }
         if let password = passwordToSave {
             center.keys.savePassword(password, hostID: host.id)
             passwordToSave = nil
         }
-        startKeepAlive(conn)
         if let command = pendingCommand {
             pendingCommand = nil
             Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(900))
-                self?.shell?.send(Array((command + "\r").utf8))
+                guard let self, self.generation == token else { return }
+                self.shell?.send(Array((command + "\r").utf8))
             }
         }
+    }
+
+    private enum RemoteKind {
+        case tmux
+        case plain(TmuxNotice?)
+    }
+
+    /// Probe only. A missing tmux binary falls back to a login shell; the install command is not sent.
+    private func remoteKind(on conn: SSHConnection, host: SSHHost, attempt: Int) async throws -> RemoteKind {
+        guard host.keepSessionsAlive else { return .plain(nil) }
+        do {
+            let (output, exit) = try await conn.exec(TmuxCommand.probeCommand)
+            guard attempt == attemptID else { throw CancellationError() }
+            if !conn.isActive { throw SSHClientError.disconnected("connection closed") }
+            if TmuxCommand.probeFound(status: exit.status, output: output) { return .tmux }
+            return .plain(.missing)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if !conn.isActive { throw error }
+            return .plain(.unknown)
+        }
+    }
+
+    private func handleEstablishError(_ error: Error) {
+        if case .hostKeyChanged = phase {
+            apply(linkMachine.handle(.connectFailed(retryable: false)))
+            return
+        }
+        if error is TerminalError {
+            apply(linkMachine.handle(.pathUnavailable))
+            return
+        }
+        if Self.isRetryable(error) {
+            apply(linkMachine.handle(.connectFailed(retryable: true)))
+            return
+        }
+        failed(error)
+        apply(linkMachine.handle(.connectFailed(retryable: false)))
+    }
+
+    private static func isRetryable(_ error: Error) -> Bool {
+        guard let ssh = error as? SSHClientError else { return true }
+        if ssh.isAuthFailure || ssh == .hostKeyRejected { return false }
+        return true
     }
 
     private func failed(_ error: Error) {
@@ -210,112 +420,108 @@ final class TerminalSession: ObservableObject, Identifiable {
         Haptics.error()
     }
 
-    private func teardown() {
-        link += 1
+    private func teardownSocket() {
+        generation += 1
         keepAlive?.cancel()
         keepAlive = nil
+        probeTask?.cancel()
+        probeTask = nil
         shell?.close()
         shell = nil
         connection?.close()
         connection = nil
     }
 
+    private func publishPhase() {
+        switch phase {
+        case .awaitingHostKey, .awaitingPassword, .hostKeyChanged, .ended, .failed:
+            return
+        case .connecting, .connected, .waitingForVPN, .reconnecting:
+            break
+        }
+        switch linkMachine.state {
+        case .connecting:
+            if hasConnected || linkMachine.attempt > 0 {
+                phase = .reconnecting(attempt: max(linkMachine.attempt, 1), delay: 0)
+            } else {
+                phase = .connecting
+            }
+        case .live:
+            phase = .connected
+        case .backoff(let attempt, let delay):
+            phase = .reconnecting(attempt: attempt, delay: delay)
+        case .waitingForPath:
+            phase = .waitingForVPN
+        case .failed, .ended:
+            break
+        }
+    }
+
     // MARK: Drops and reconnect
 
     private func received(_ bytes: [UInt8], token: Int) {
-        guard token == link else { return }
+        guard token == generation else { return }
         terminalView.feed(byteArray: bytes[...])
     }
 
     private func shellExited(_ exit: ShellExit, token: Int) {
-        guard token == link, !userClosed else { return }
+        guard token == generation, !userClosed else { return }
         if exit.isClean {
-            teardown()
             let how = exit.status.map { "exit \($0)" } ?? exit.signal.map { "signal \($0)" } ?? "closed"
-            banner("session ended (\(how))", color: 90)
             phase = .ended("Session ended (\(how))")
             _ = terminalView.resignFirstResponder()
+            apply(linkMachine.handle(.cleanExit))
         } else {
-            dropped(exit.error)
+            apply(linkMachine.handle(.socketClosed))
         }
     }
 
-    private func connectionClosed(_ reason: SSHClientError?, token: Int) {
-        guard token == link, !userClosed, phase == .connected else { return }
-        dropped(reason)
+    private func connectionClosed(_: SSHClientError?, token: Int) {
+        guard token == generation, !userClosed else { return }
+        switch linkMachine.state {
+        case .live, .connecting:
+            apply(linkMachine.handle(.socketClosed))
+        case .backoff, .waitingForPath, .failed, .ended:
+            break
+        }
     }
 
-    private func dropped(_ reason: SSHClientError?) {
-        let why = pingDropped ? SSHClientError.pingTimeout : reason
-        teardown()
-        banner("connection lost\(why.map { ": \($0.description)" } ?? "")", color: 33)
-        startReconnecting()
-    }
-
-    private func startReconnecting() {
-        runTask?.cancel()
-        runTask = Task { [weak self] in await self?.reconnectLoop() }
-    }
-
-    private func reconnectLoop() async {
-        var attempt = 0
-        while !Task.isCancelled, !userClosed {
-            guard center.isActive else {
-                phase = .waitingForVPN
-                try? await Task.sleep(for: .seconds(2))
-                continue
-            }
-            switch center.access(to: host.address) {
-            case .open:
-                break
-            case .needsSiteWiFi:
-                phase = .failed(TerminalError.needsSiteWiFi.description)
+    private func startProbe() {
+        probeTask?.cancel()
+        let token = generation
+        probeTask = Task { [weak self] in
+            guard let self else { return }
+            guard let conn = self.connection, conn.isActive else {
+                guard self.generation == token else { return }
+                self.apply(self.linkMachine.handle(.socketClosed))
                 return
-            case .needsOverlay:
-                phase = .waitingForVPN
-                try? await Task.sleep(for: .seconds(2))
-                continue
             }
-            let delay = Self.backoff[min(attempt, Self.backoff.count - 1)]
-            phase = .reconnecting(attempt: attempt + 1, delay: delay)
-            try? await Task.sleep(for: .seconds(delay))
-            if Task.isCancelled || userClosed { return }
             do {
-                try await establish()
-                return
+                try await conn.ping(timeout: .seconds(5))
+                guard !Task.isCancelled, self.generation == token else { return }
+                self.apply(self.linkMachine.handle(.pingSucceeded))
             } catch {
-                if error is CancellationError { return }
-                if case .hostKeyChanged = phase { return }
-                if let ssh = error as? SSHClientError, ssh.isAuthFailure || ssh == .hostKeyRejected {
-                    failed(error)
-                    return
-                }
-                attempt += 1
-                if attempt >= Self.maxReconnectAttempts {
-                    failed(error)
-                    return
-                }
+                guard !Task.isCancelled, self.generation == token else { return }
+                self.apply(self.linkMachine.handle(.socketClosed))
             }
         }
     }
 
-    private func startKeepAlive(_ conn: SSHConnection) {
+    private func startKeepAlive() {
         keepAlive?.cancel()
+        let token = generation
+        guard let conn = connection else { return }
         keepAlive = Task { [weak self] in
-            var missed = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
-                if Task.isCancelled { return }
+                guard let self, !Task.isCancelled, self.generation == token else { return }
                 do {
                     try await conn.ping(timeout: .seconds(10))
-                    missed = 0
+                    guard self.generation == token else { return }
+                    self.apply(self.linkMachine.handle(.pingSucceeded))
                 } catch {
-                    missed += 1
-                    if missed >= 2 {
-                        self?.pingDropped = true
-                        conn.close()
-                        return
-                    }
+                    guard self.generation == token else { return }
+                    self.apply(self.linkMachine.handle(.pingMissed))
                 }
             }
         }
@@ -324,8 +530,9 @@ final class TerminalSession: ObservableObject, Identifiable {
     // MARK: Prompts
 
     private func verify(_ key: HostKeyInfo) async -> Bool {
+        let saved = displayHost
         let hosts = center.hosts
-        switch hosts.knownHosts.verdict(address: host.address, port: host.port, key: key) {
+        switch hosts.knownHosts.verdict(address: saved.address, port: saved.port, key: key) {
         case .trusted:
             return true
         case .changed(let previous):
@@ -334,7 +541,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             return false
         case .unknown:
             if center.launch.autoTrusts(key.fingerprint) {
-                hosts.trust(key, for: host, address: host.address)
+                hosts.trust(key, for: saved, address: saved.address)
                 return true
             }
             let before = phase
@@ -342,7 +549,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             Haptics.warning()
             let trusted = await withCheckedContinuation { hostKeyReply = $0 }
             if trusted {
-                hosts.trust(key, for: host, address: host.address)
+                hosts.trust(key, for: saved, address: saved.address)
                 phase = before
             }
             return trusted
@@ -412,16 +619,6 @@ final class TerminalSession: ObservableObject, Identifiable {
         _ = terminalView.becomeFirstResponder()
     }
 
-    private func banner(_ text: String, color: Int) {
-        terminalView.feed(text: "\r\n\u{1b}[\(color)m— \(text) —\u{1b}[0m\r\n")
-    }
-
-    private static let clock: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        return f
-    }()
-
     private static func color(_ rgb: UInt32) -> SwiftTerm.Color {
         SwiftTerm.Color(
             red: UInt16((rgb >> 16) & 0xff) * 257,
@@ -435,6 +632,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         case let e as SSHClientError: return e.description
         case let e as TerminalError: return e.description
         case let e as DirectoryError: return e.description
+        case let e as TmuxListError: return e.description
         case let e as KeychainError: return e.description
         case let e as KeyImportError: return e.description
         default: return error.localizedDescription
@@ -454,7 +652,12 @@ extension TerminalSession: @preconcurrency TerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        shell?.send(Array(data))
+        let bytes = Array(data)
+        if let shell, phase == .connected {
+            shell.send(bytes)
+        } else {
+            inputBuffer.append(bytes)
+        }
     }
 
     func scrolled(source: TerminalView, position: Double) {}

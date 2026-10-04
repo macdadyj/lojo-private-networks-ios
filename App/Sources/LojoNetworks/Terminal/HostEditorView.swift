@@ -13,6 +13,8 @@ struct HostEditorView: View {
     @State private var hasPassword: Bool
     @State private var revealAddress = false
     @State private var diagnosing = false
+    @State private var showSessions = false
+    @State private var showInstall = false
     private let isNew: Bool
 
     init(draft: HostDraft) {
@@ -99,6 +101,25 @@ struct HostEditorView: View {
                     }
                 }
 
+                Section {
+                    Toggle("Keep sessions alive (tmux)", isOn: $host.keepSessionsAlive)
+                    if host.keepSessionsAlive {
+                        Toggle("tmux mouse", isOn: $host.tmuxMouse)
+                        Button("Show install command") { showInstall = true }
+                    }
+                    if !isNew, host.keepSessionsAlive {
+                        Button {
+                            showSessions = true
+                        } label: {
+                            Label("Sessions on this host", systemImage: "square.stack")
+                        }
+                    }
+                } footer: {
+                    Text(host.keepSessionsAlive
+                         ? "Each connection attaches to a tmux session named lojo-… on the host. The shell keeps running if this iPhone sleeps or the network changes. Scrolling and copy stay on the phone. Turn on tmux mouse only if you want the host to take the mouse. If tmux is missing, the app uses a plain shell and shows the install command. It never installs anything."
+                         : "Off: a dropped connection ends the shell. Turn this on to keep work running on the host.")
+                }
+
                 if !isNew {
                     Section {
                         Button {
@@ -146,6 +167,11 @@ struct HostEditorView: View {
                 portText = String(known.port)
                 host.username = known.username
                 if host.label.isEmpty { host.label = known.label }
+            }
+            .sheet(isPresented: $showInstall) { TmuxInstallSheet() }
+            .sheet(isPresented: $showSessions) {
+                TmuxSessionsView(host: host)
+                    .environmentObject(center)
             }
             .sheet(isPresented: $diagnosing) {
                 DiagnosticsView(host: hosts.hosts.first { $0.id == host.id } ?? host, center: center)
@@ -233,6 +259,11 @@ struct TerminalSettingsView: View {
                     Toggle("Mask addresses", isOn: $center.redact)
                 } footer: {
                     Text("Hides the last two parts of every IP address in the Terminal tab, for screenshots and screen sharing.")
+                }
+                Section {
+                    Text("Each host has Keep sessions alive (tmux), on by default. Change it in that host's editor. A session stays on the host when this app leaves the screen, and the phone reattaches to it.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Terminal")

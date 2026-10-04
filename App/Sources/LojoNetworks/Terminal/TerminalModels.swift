@@ -2,17 +2,78 @@ import Foundation
 import LojoSSH
 
 struct SSHHost: Codable, Identifiable, Hashable, Sendable {
-    var id = UUID()
+    var id: UUID
     var label: String
     var address: String
-    var port: Int = 22
+    var port: Int
     var username: String
-    var group: String = "Hosts"
+    var group: String
     /// nil: offer every key on the phone.
     var keyID: String?
-    var isGateway = false
+    var isGateway: Bool
+    /// Attach this host's tabs to a tmux session so the shell survives a dropped connection.
+    var keepSessionsAlive: Bool
+    /// When on, tmux captures the mouse. Off keeps scrolling and copy in the phone's terminal.
+    var tmuxMouse: Bool
 
     var endpoint: String { port == 22 ? address : "\(address):\(port)" }
+
+    init(
+        id: UUID = UUID(),
+        label: String,
+        address: String,
+        port: Int = 22,
+        username: String,
+        group: String = "Hosts",
+        keyID: String? = nil,
+        isGateway: Bool = false,
+        keepSessionsAlive: Bool = true,
+        tmuxMouse: Bool = false
+    ) {
+        self.id = id
+        self.label = label
+        self.address = address
+        self.port = port
+        self.username = username
+        self.group = group
+        self.keyID = keyID
+        self.isGateway = isGateway
+        self.keepSessionsAlive = keepSessionsAlive
+        self.tmuxMouse = tmuxMouse
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, address, port, username, group, keyID, isGateway, keepSessionsAlive, tmuxMouse
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        label = try container.decode(String.self, forKey: .label)
+        address = try container.decode(String.self, forKey: .address)
+        port = try container.decodeIfPresent(Int.self, forKey: .port) ?? 22
+        username = try container.decode(String.self, forKey: .username)
+        group = try container.decodeIfPresent(String.self, forKey: .group) ?? "Hosts"
+        keyID = try container.decodeIfPresent(String.self, forKey: .keyID)
+        isGateway = try container.decodeIfPresent(Bool.self, forKey: .isGateway) ?? false
+        let settings = try HostSessionSettings(from: decoder)
+        keepSessionsAlive = settings.keepSessionsAlive
+        tmuxMouse = settings.tmuxMouse
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        try container.encode(address, forKey: .address)
+        try container.encode(port, forKey: .port)
+        try container.encode(username, forKey: .username)
+        try container.encode(group, forKey: .group)
+        try container.encodeIfPresent(keyID, forKey: .keyID)
+        try container.encode(isGateway, forKey: .isGateway)
+        try container.encode(keepSessionsAlive, forKey: .keepSessionsAlive)
+        try container.encode(tmuxMouse, forKey: .tmuxMouse)
+    }
 }
 
 /// Login user and port for the LOJO devices we know, keyed by address. Seeded as hosts on first

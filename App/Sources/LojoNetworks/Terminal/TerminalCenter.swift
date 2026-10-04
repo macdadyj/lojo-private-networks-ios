@@ -1,12 +1,13 @@
 import Combine
 import Foundation
 import LojoSSH
+import UIKit
 
 /// QA hooks for the Terminal tab (docs/ssh-terminal.md §8). The DEBUG-only ones can type into a
 /// shell or trust a host key, so release builds ignore them.
 struct TerminalLaunch: Sendable {
     enum Screen: String, Sendable {
-        case hosts, keys, key, settings, edit, diag
+        case hosts, keys, key, settings, edit, diag, sessions, reconnecting
     }
 
     var screen: Screen?
@@ -21,6 +22,8 @@ struct TerminalLaunch: Sendable {
     var trustFingerprint: String?
     var gatewayPort: Int?
     var ensureKey = false
+    /// DEBUG screenshot hook: session list and reconnecting indicator use sample data and do not dial.
+    var preview = false
 
     func autoTrusts(_ fingerprint: String) -> Bool {
         guard let trustFingerprint else { return false }
@@ -48,6 +51,7 @@ struct TerminalLaunch: Sendable {
         launch.trustFingerprint = text("LOJO_SSH_TRUST_FP")
         launch.gatewayPort = text("LOJO_SSH_GATEWAY_PORT").flatMap(Int.init)
         launch.ensureKey = flag("LOJO_SSH_ENSURE_KEY")
+        launch.preview = flag("LOJO_SSH_PREVIEW")
         #endif
         return launch
     }()
@@ -84,10 +88,13 @@ final class TerminalCenter: ObservableObject {
         didSet { defaults.set(redact, forKey: Keys.redact) }
     }
 
-    private(set) var isActive = true
     var launchApplied = false
     private let defaults = UserDefaults.standard
     private var vpnMonitor: Task<Void, Never>?
+    private var pathDebounce: Task<Void, Never>?
+    private let pathWatcher = PathWatcher()
+    private let backgroundLease = BackgroundLease()
+    private var sceneIsBackground = false
 
     nonisolated static let fontRange: ClosedRange<Double> = 9...24
     static let directoryCommand = "$HOME/.local/bin/lojo-ssh-directory --json"
@@ -113,14 +120,19 @@ final class TerminalCenter: ObservableObject {
                 self?.refreshVPN()
             }
         }
+        pathWatcher.start { [weak self] in
+            self?.networkPathChanged()
+        }
     }
 
     var selected: TerminalSession? { sessions.first { $0.id == selectedID } ?? sessions.last }
 
     func refreshVPN() {
         let phone = PhoneInterfaces.current()
+        let changed = phone.vpnIPv4 != vpnAddress || phone.wifiIPv4 != wifiIPv4
         if phone.vpnIPv4 != vpnAddress { vpnAddress = phone.vpnIPv4 }
         if phone.wifiIPv4 != wifiIPv4 { wifiIPv4 = phone.wifiIPv4 }
+        if changed { sessions.forEach { $0.networkChanged() } }
     }
 
     func setOverlayProbe(_ up: Bool) {
@@ -131,24 +143,86 @@ final class TerminalCenter: ObservableObject {
         HostGate.access(address: address, policy: hosts.policy, overlayUp: overlayIsUp, wifiIPv4: wifiIPv4)
     }
 
-    func sceneChanged(active: Bool) {
-        isActive = active
-        guard active else { return }
-        refreshVPN()
-        sessions.forEach { $0.resumeIfDropped() }
+    /// Background keeps the socket (via a short `beginBackgroundTask`) and the terminal view.
+    /// Returning to the foreground probes a live socket and reattaches immediately if it died.
+    func noteScene(inBackground: Bool) {
+        if inBackground {
+            guard !sceneIsBackground else { return }
+            sceneIsBackground = true
+            sessions.forEach { $0.sceneDidBackground() }
+        } else {
+            guard sceneIsBackground else { return }
+            sceneIsBackground = false
+            refreshVPN()
+            sessions.forEach { $0.sceneDidForeground() }
+        }
+    }
+
+    func noteBackground(begin: Bool) {
+        if begin { backgroundLease.begin() } else { backgroundLease.end() }
+    }
+
+    private func networkPathChanged() {
+        pathDebounce?.cancel()
+        pathDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            self.refreshVPN()
+            self.sessions.forEach { $0.networkChanged() }
+        }
     }
 
     // MARK: Sessions
 
     @discardableResult
-    func open(_ host: SSHHost) -> TerminalSession {
+    func open(_ host: SSHHost, tmuxSession: String? = nil) -> TerminalSession {
         let command = sessions.isEmpty ? launch.run : nil
-        let session = TerminalSession(host: host, center: self, command: command)
+        let name = resolvedTmuxName(tmuxSession, for: host)
+        let session = TerminalSession(host: host, center: self, command: command, tmuxSessionName: name)
         sessions.append(session)
         selectedID = session.id
         showingSession = true
         session.connect()
         return session
+    }
+
+    #if DEBUG
+    func openReconnectingPreview() {
+        let host = SSHHost(label: "Demo host", address: "100.64.0.2", port: 22, username: "owner", group: "Demo")
+        let session = TerminalSession(
+            host: host, center: self, tmuxSessionName: TmuxCommand.sessionName(forLabel: host.label)
+        )
+        session.parkReconnectingPreview()
+        sessions.append(session)
+        selectedID = session.id
+        showingSession = true
+    }
+    #endif
+
+    /// Shows a tab already attached to `name`, or opens one that attaches to it.
+    func attachTmuxSession(named name: String, on host: SSHHost) {
+        guard TmuxCommand.isSafeName(name) else { return }
+        if let existing = sessions.first(where: { $0.tmuxSessionName == name && $0.host.id == host.id }) {
+            show(existing)
+            return
+        }
+        open(host, tmuxSession: name)
+    }
+
+    private func resolvedTmuxName(_ requested: String?, for host: SSHHost) -> String {
+        if let requested, TmuxCommand.isSafeName(requested) { return requested }
+        return nextTmuxName(for: host)
+    }
+
+    private func nextTmuxName(for host: SSHHost) -> String {
+        let used = Set(sessions.filter { $0.host.id == host.id }.map(\.tmuxSessionName))
+        let base = TmuxCommand.sessionName(forLabel: host.label)
+        if !used.contains(base) { return base }
+        var generation = 2
+        while used.contains(TmuxCommand.sessionName(forLabel: host.label, generation: generation)) {
+            generation += 1
+        }
+        return TmuxCommand.sessionName(forLabel: host.label, generation: generation)
     }
 
     func close(_ session: TerminalSession) {
@@ -193,6 +267,50 @@ final class TerminalCenter: ObservableObject {
 
     private func restyle() {
         sessions.forEach { $0.apply(theme: theme, fontSize: fontSize) }
+    }
+
+    // MARK: tmux sessions on a host
+
+    func listTmuxSessions(on host: SSHHost) async throws -> [TmuxRemoteSession] {
+        let conn = try await connected(to: host)
+        defer { conn.close() }
+        let (output, exit) = try await conn.exec(TmuxCommand.listCommand())
+        if TmuxCommand.listIsEmpty(status: exit.status, output: output) { return [] }
+        guard exit.status == 0 else {
+            throw TmuxListError.failed("The host couldn't list tmux sessions (exit \(exit.status.map(String.init) ?? "?")).")
+        }
+        return TmuxCommand.parseSessionList(String(decoding: output, as: UTF8.self))
+    }
+
+    func killTmuxSession(_ name: String, on host: SSHHost) async throws {
+        guard let command = TmuxCommand.killCommand(session: name) else { throw TmuxListError.refusedName }
+        let conn = try await connected(to: host)
+        defer { conn.close() }
+        let (_, exit) = try await conn.exec(command)
+        guard exit.status == 0 else {
+            throw TmuxListError.failed("The host didn't end \(name) (exit \(exit.status.map(String.init) ?? "?")).")
+        }
+    }
+
+    private func connected(to host: SSHHost) async throws -> SSHConnection {
+        switch access(to: host.address) {
+        case .open:
+            break
+        case .needsOverlay:
+            throw TerminalError.vpnDown
+        case .needsSiteWiFi:
+            throw TerminalError.needsSiteWiFi
+        }
+        guard !hosts.savedHostKeys(for: host).isEmpty else { throw TmuxListError.untrusted }
+        let policy = hosts.policy
+        let name = host.address
+        let address = try await Task.detached { try policy.resolve(name) }.value
+        let known = hosts.knownHosts
+        return try await SSHConnection.connect(
+            to: SSHTarget(address: address, port: host.port, username: host.username),
+            credentials: credentials(for: host),
+            verifyHostKey: { key in known.verdict(address: host.address, port: host.port, key: key) == .trusted }
+        )
     }
 
     // MARK: Gateway directory
@@ -253,6 +371,54 @@ final class TerminalCenter: ObservableObject {
         } catch {
             directoryState = .failed(TerminalSession.message(for: error))
         }
+    }
+}
+
+enum TmuxListError: Error, CustomStringConvertible {
+    case untrusted
+    case refusedName
+    case failed(String)
+
+    var description: String {
+        switch self {
+        case .untrusted:
+            return "Connect to this host once and trust its host key, then list its sessions."
+        case .refusedName:
+            return "That session name can't be ended from here."
+        case .failed(let text):
+            return text
+        }
+    }
+}
+
+/// One `beginBackgroundTask` shared by every live terminal, so iOS leaves the socket up briefly
+/// after the app leaves the foreground. It does not keep the app running in the background.
+@MainActor
+private final class BackgroundLease {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+    private var holders = 0
+
+    func begin() {
+        holders += 1
+        guard id == .invalid else { return }
+        id = UIApplication.shared.beginBackgroundTask(withName: "LOJO Terminal") { [weak self] in
+            Task { @MainActor in self?.expire() }
+        }
+    }
+
+    func end() {
+        guard holders > 0 else { return }
+        holders -= 1
+        guard holders == 0 else { return }
+        expire()
+    }
+
+    private func expire() {
+        holders = 0
+        guard id != .invalid else { return }
+        let current = id
+        id = .invalid
+        UIApplication.shared.endBackgroundTask(current)
     }
 }
 
