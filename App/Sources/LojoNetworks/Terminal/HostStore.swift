@@ -58,7 +58,7 @@ final class HostStore: ObservableObject {
     }
 
     private static let seedVersionKey = "lojo.ssh.seededDefaults"
-    private static let seedVersion = 1
+    private static let seedVersion = 2
 
     /// The gateway the app already talks to is the first SSH host. Once per seed version, the known
     /// LOJO devices are added and saved hosts at those addresses get their default user and port
@@ -72,13 +72,17 @@ final class HostStore: ObservableObject {
             ))
         }
         let defaults = UserDefaults.standard
-        if defaults.integer(forKey: Self.seedVersionKey) < Self.seedVersion {
-            for known in HostDefaults.known {
+        let seeded = defaults.integer(forKey: Self.seedVersionKey)
+        if seeded < Self.seedVersion {
+            for known in HostDefaults.known where known.since > seeded {
                 let matches = hosts.indices.filter { hosts[$0].address == known.address }
                 if matches.isEmpty {
                     guard gateway?.address != known.address else { continue }
                     hosts.append(SSHHost(label: known.label, address: known.address, port: known.port, username: known.username, group: known.group))
                 }
+                // Version 1 also repaired hosts saved by older builds (gateway on 22, guessed users).
+                // Later versions only add hosts and never overwrite what the user has edited.
+                guard seeded < 1 else { continue }
                 for i in matches {
                     hosts[i].port = known.port
                     hosts[i].username = known.username

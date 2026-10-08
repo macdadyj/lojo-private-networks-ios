@@ -84,12 +84,17 @@ struct HostDefaults: Sendable, Hashable {
     var username: String
     var port: Int
     var group: String
+    /// The `HostStore.seedVersion` that introduced this entry. Saved hosts are only added for entries
+    /// newer than the version this phone last seeded, so a host the user deleted stays deleted.
+    var since: Int = 1
 
     static let known: [HostDefaults] = [
         HostDefaults(label: "santacomputa", address: "100.96.1.18", username: "jon", port: 2222, group: "Gateway"),
         HostDefaults(label: "labMachine", address: "100.96.1.90", username: "jon", port: 22, group: "Lab"),
         HostDefaults(label: "Vision Pi", address: "100.96.1.115", username: "pi", port: 22, group: "Pis"),
         HostDefaults(label: "BlueBox", address: "192.168.7.42", username: "jon", port: 22, group: "Shop LAN"),
+        // Raspberry Pi 4, Debian 13. Overlay device saintTherese (vision@lojo), sshd on 22, login jon.
+        HostDefaults(label: "saintTherese", address: "100.96.1.116", username: "jon", port: 22, group: "Pis", since: 2),
     ]
 
     static func match(address: String) -> HostDefaults? {
