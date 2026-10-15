@@ -141,9 +141,12 @@ struct HostEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("host.editor.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save).disabled(!canSave)
+                    Button("Save", action: save)
+                        .disabled(!canSave)
+                        .accessibilityIdentifier("host.editor.save")
                 }
             }
             .confirmationDialog("Forget the saved host key?", isPresented: $confirmForgetKey, titleVisibility: .visible) {
@@ -230,6 +233,7 @@ struct TerminalSettingsView: View {
                     Stepper(value: $center.fontSize, in: TerminalCenter.fontRange, step: 1) {
                         LabeledContent("Font size", value: "\(Int(center.fontSize)) pt")
                     }
+                    .accessibilityIdentifier("terminal.settings.font")
                     Text("user@host:~$ ls -la")
                         .font(.system(size: CGFloat(center.fontSize), design: .monospaced))
                         .foregroundStyle(Color(uiColor: UIColor(rgb: center.theme.palette.fg)))
@@ -253,10 +257,12 @@ struct TerminalSettingsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("terminal.settings.theme.\(theme.rawValue)")
                     }
                 }
                 Section {
                     Toggle("Mask addresses", isOn: $center.redact)
+                        .accessibilityIdentifier("terminal.settings.redact")
                 } footer: {
                     Text("Hides the last two parts of every IP address in the Terminal tab, for screenshots and screen sharing.")
                 }
@@ -271,6 +277,7 @@ struct TerminalSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("terminal.settings.done")
                 }
             }
         }

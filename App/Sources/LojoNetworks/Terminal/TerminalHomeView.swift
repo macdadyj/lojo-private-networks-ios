@@ -60,6 +60,7 @@ struct TerminalHomeView: View {
                     NavigationLink(value: TerminalRoute.keys) {
                         Label("Keys", systemImage: "key.horizontal")
                     }
+                    .accessibilityIdentifier("terminal.home.keys")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
@@ -68,12 +69,14 @@ struct TerminalHomeView: View {
                         Image(systemName: "textformat.size")
                     }
                     .accessibilityLabel("Terminal settings")
+                    .accessibilityIdentifier("terminal.home.settings")
                     Button {
                         editing = HostDraft(host: SSHHost(label: "", address: "", username: "jon"), isNew: true)
                     } label: {
                         Image(systemName: "plus")
                     }
                     .accessibilityLabel("Add host")
+                    .accessibilityIdentifier("terminal.home.add")
                 }
             }
             .navigationDestination(for: TerminalRoute.self) { route in
@@ -205,6 +208,14 @@ struct TerminalHomeView: View {
         case .reconnecting:
             #if DEBUG
             if launch.preview { center.openReconnectingPreview() }
+            #endif
+        case .scrollback:
+            #if DEBUG
+            if launch.preview { center.openScrollbackPreview(lines: launch.floodLines, alternate: false) }
+            #endif
+        case .alternate:
+            #if DEBUG
+            if launch.preview { center.openScrollbackPreview(lines: launch.floodLines, alternate: true) }
             #endif
         case .hosts, nil: break
         }

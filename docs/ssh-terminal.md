@@ -188,7 +188,9 @@ LOJO_SSH_REDACT=1 LOJO_SSH_PREVIEW=1 scripts/phone-shot.sh /tmp/ssh-sessions.png
   LOJO_SCREEN=terminal LOJO_SSH_SCREEN=sessions
 ```
 
-`edit` is the host editor with **Keep sessions alive (tmux)** (default on) and **Show install command**. `reconnecting` (debug, and only with `LOJO_SSH_PREVIEW=1`) shows the **Reconnecting…** indicator and the Reconnect button on a demo host, without dialing. `sessions` with `LOJO_SSH_PREVIEW=1` shows the sample session list (`lojo-demo-host`). Without the preview flag, Sessions talks to the real host. Do not commit shots that contain hostnames or addresses beyond the ones already in this doc.
+`edit` is the host editor with **Keep sessions alive (tmux)** (default on) and **Show install command**. `reconnecting` (debug, and only with `LOJO_SSH_PREVIEW=1`) shows the **Reconnecting…** indicator and the Reconnect button on a demo host, without dialing. `sessions` with `LOJO_SSH_PREVIEW=1` shows the sample session list (`lojo-demo-host`). `scrollback` (debug, `LOJO_SSH_PREVIEW=1`) feeds `LOJO_SSH_FLOOD` fake lines (default 2500) so scrollback can be tested without SSH. `alternate` does the same inside the alternate screen (TUI). Without the preview flag, Sessions talks to the real host. Do not commit shots that contain hostnames or addresses beyond the ones already in this doc.
+
+The live terminal keeps 10,240 lines of history. New output stays pinned to the bottom until you scroll up; **Jump to latest** returns you. On a TUI that switched to the alternate screen, a swipe is sent as mouse-wheel (or arrows / page) so the program's own history moves.
 
 On the iPhone, LOJO VPN on, Terminal, connect to santacomputa (`jon`, port 2222) and trust the host key if asked:
 

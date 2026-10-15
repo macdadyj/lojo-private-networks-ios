@@ -65,6 +65,7 @@ targets:
     dependencies:
       - target: LojoSSH
       - target: LojoTrust
+      - target: LojoTerminalScroll
       - package: swift-nio-ssh
         product: NIOSSH
       - package: swift-crypto
@@ -77,9 +78,42 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Info.plist
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "1.2"
         ENABLE_PREVIEWS: NO
+  LojoTerminalScroll:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/LojoTerminalScroll
+  LojoNetworksTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/LojoNetworksTests
+    dependencies:
+      - target: LojoTerminalScroll
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  LojoNetworksUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: LojoNetworks
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: LojoNetworks
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
 schemes:
   LojoNetworks:
     build:
@@ -87,3 +121,21 @@ schemes:
         LojoNetworks: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - LojoNetworksTests
+    archive:
+      config: Release
+      customArchiveName: LojoNetworks
+  LojoNetworksUI:
+    build:
+      targets:
+        LojoNetworks: all
+        LojoNetworksUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - LojoNetworksUITests

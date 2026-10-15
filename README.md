@@ -30,12 +30,15 @@ and no Simulator; "run" means the physical phone.
 | `App/Sources/LojoNetworks/Demo` | Demo network "Juniper Mesa Ranch", procedurally drawn camera stills and site plan |
 | `App/Sources/LojoNetworks/Design` | Theme, cards, status dots, buttons, haptics, toasts |
 | `App/Sources/LojoSSH` | SSH core on apple/swift-nio-ssh: connection, auth, PTY shell, exec, keep-alive ping, known_hosts, overlay-only policy, key import. No UIKit, so `tools/ssh-smoke` builds it on Linux too |
-| `App/Sources/LojoNetworks/Terminal` | Terminal tab: saved hosts, gateway device list, Secure Enclave / Keychain keys, host-key checks, session tabs on SwiftTerm (pinned v1.11.2, fetched by `sync-app.sh`). Each tab attaches a named tmux session so the shell survives a dropped SSH connection |
+| `App/Sources/LojoNetworks/Terminal` | Terminal tab: saved hosts, gateway device list, Secure Enclave / Keychain keys, host-key checks, session tabs on SwiftTerm (pinned v1.11.2, fetched by `sync-app.sh`). Each tab attaches a named tmux session so the shell survives a dropped SSH connection. Scrollback is 10,240 lines with pin-to-bottom and a Jump to latest chip |
+| `App/Sources/LojoTerminalScroll` | Foundation-only scrollback policy (buffer size, pin/unpin, TUI wheel translation). Linux-tested from `tools/terminal-scrollback` |
+| `.github/workflows/ios.yml` | macOS unit tests, phone UI tests (every tap + flood scroll), TestFlight upload on `main` |
 | `gateway/lojo-ssh-directory` | Read-only gateway script the Terminal tab runs over SSH to list LOJO devices and whether SSH is open |
 | `tools/ssh-smoke` | Linux smoke test for `LojoSSH` against a real OpenSSH (`scripts/test-sshd.sh smoke`) |
 | `tools/terminal-persist` | Unit tests for the reconnect state machine and tmux command strings (`swift test`). GitHub Actions runs them on Linux and macOS |
+| `tools/terminal-scrollback` | Linux unit tests for the 10k-line scrollback policy |
 | `sidecar/` | Site gateway `ranch-field-api` (Node 20). Source of truth for `~/.local/share/ranch-field-api/` |
-| `scripts/` | `deploy-phone.sh`, `sync-app.sh`, `phone-shot.sh`, `deploy-sidecar.sh`, `gateway-tls.sh` (site CA, server cert, rotation, pairing QR), `make-icon.py` |
+| `scripts/` | `deploy-phone.sh`, `sync-app.sh`, `phone-shot.sh`, `deploy-sidecar.sh`, `gateway-tls.sh` (site CA, server cert, rotation, pairing QR), `make-icon.py`, `archive-upload.sh`, `ios-unit-test.sh`, `phone-ui-test.sh` |
 | `docs/` | Design doc, HTTPS design, screenshots |
 
 ## Architecture
@@ -95,6 +98,34 @@ the build dir is disposable. Signing on NTFS (`LOJODESKDRIVE`) fails with `0xe80
 
 `ld64.lld: warning: This version of lld does not support linking for platform iOS` is expected.
 
+## TestFlight
+
+The **iOS** workflow matches [lojo-watch-remote](https://github.com/macdadyj/lojo-watch-remote) `.github/workflows/ios.yml`: `macos-26`, Xcode 26, tests gate the upload, build number is the GitHub run number (a re-run appends `.attempt`), and a push to `main` archives and uploads to App Store Connect. Pull requests never sign or upload.
+
+The on-device xtool bundle `XTL-N9H4648NB9.com.lojo.*` (or `XTL-HG9HAYXW44.com.lojo.PrivateNetworks` on santa) is a development prefix. App Store Connect cannot use that prefix. TestFlight uses **`com.lojo.PrivateNetworks`**.
+
+### GitHub secrets (same names as Watch Remote)
+
+This agent cannot read or write repository secrets. If any of these are missing on `macdadyj/lojo-private-networks-ios`, paste the Watch Remote values:
+
+```bash
+gh secret set ASC_KEY_ID -R macdadyj/lojo-private-networks-ios
+gh secret set ASC_ISSUER_ID -R macdadyj/lojo-private-networks-ios
+base64 < AuthKey_XXXXXXXXXX.p8 | gh secret set ASC_KEY_P8 -R macdadyj/lojo-private-networks-ios
+gh secret set DEVELOPMENT_TEAM -R macdadyj/lojo-private-networks-ios
+```
+
+`ASC_KEY_P8` may be the `.p8` as base64 or the PEM text. `DEVELOPMENT_TEAM` is the paid Apple team id (not committed). The workflow mints a one-run iOS Distribution certificate and an App Store profile, then deletes the profile and revokes only that certificate.
+
+### App Store Connect clicks (once)
+
+1. [developer.apple.com/account](https://developer.apple.com/account) → **Certificates, Identifiers & Profiles** → **Identifiers** → **+** → **App IDs** → **Continue**.
+2. Type **App**, Continue. Description `LOJO Networks`. Bundle ID **Explicit** `com.lojo.PrivateNetworks`. Continue → Register. No extra capabilities.
+3. [appstoreconnect.apple.com](https://appstoreconnect.apple.com) → **Apps** → **+** → **New App**.
+4. Platform **iOS**. Name `LOJO Networks`. Primary Language **English (U.S.)**. Bundle ID `com.lojo.PrivateNetworks`. SKU `lojo-private-networks`. User Access **Full Access** → Create.
+
+The build number is shown in the app under **Settings → Build**. After the first green `main` run, install from TestFlight (Developer Mode is not required).
+
 ### First install on a phone (needs a human at the phone)
 
 1. Phone unlocked, on the USB cable, Developer Mode on (`pymobiledevice3 amfi developer-mode-status` → `true`).
@@ -131,7 +162,7 @@ A free Apple ID gives a ~1-year development certificate but a **~7-day provision
 `scripts/deploy-phone.sh`. xtool re-provisions and re-signs, and app data is kept. If
 `xtool auth status` isn't "Logged in", run `xtool-auth-login` in a real terminal (password + 2FA,
 never pasted into chat). Free-account limits: about 3 sideloaded apps (currently HelloLab,
-RanchField, LOJO Networks) and 10 new App IDs per week. USB only; no TestFlight or push.
+RanchField, LOJO Networks) and 10 new App IDs per week. USB only for that free-profile install. TestFlight builds come from the **iOS** GitHub Action on `main` (paid team, bundle `com.lojo.PrivateNetworks`, no `XTL-` prefix).
 
 ## Site gateway (sidecar)
 
@@ -214,7 +245,8 @@ scripts/phone-shot.sh OUT.png [KEY=VALUE ...]    # launches (kills existing) the
 |---|---|
 | `LOJO_DEMO` | `1` demo network, `0` live gateway (persisted) |
 | `LOJO_SCREEN` | `home`, `detail`, `activity`, `map`, `check`, `onboarding`, `setup`, `settings`, `terminal` |
-| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `key` (the Secure Enclave key with Copy authorize command), `settings`, `edit` (host editor, including Keep sessions alive), `diag` (diagnostics), `sessions`, `reconnecting` |
+| `LOJO_SSH_SCREEN` | with `terminal`: `hosts`, `keys`, `key` (the Secure Enclave key with Copy authorize command), `settings`, `edit` (host editor, including Keep sessions alive), `diag` (diagnostics), `sessions`, `reconnecting`, `scrollback` (debug flood), `alternate` (debug TUI) |
+| `LOJO_SSH_FLOOD` | debug builds only; line count for `scrollback` / `alternate` (default 2500) |
 | `LOJO_SSH_HOST` | host label for `edit` and `diag` (default `gateway`) |
 | `LOJO_SSH_CONNECT` | with `terminal`: host label to open a session to (`gateway` = the seeded site gateway) |
 | `LOJO_SSH_REDACT` | `1` masks IP addresses in the Terminal tab (use for every screenshot) |

@@ -35,11 +35,13 @@ let package = Package(
             ]
         ),
         .target(name: "LojoTrust"),
+        .target(name: "LojoTerminalScroll"),
         .target(
             name: "LojoNetworks",
             dependencies: [
                 "LojoTrust",
                 "LojoSSH",
+                "LojoTerminalScroll",
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),

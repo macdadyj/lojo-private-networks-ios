@@ -1,0 +1,185 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux-tests:
+    name: Linux unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0.3"
+      - name: Reconnect and tmux tests
+        working-directory: tools/terminal-persist
+        run: swift test
+      - name: Scrollback tests
+        working-directory: tools/terminal-scrollback
+        run: swift test
+
+  ios-tests:
+    name: iOS unit tests
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Archive script self-test
+        run: scripts/archive-upload.sh --self-test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('App/project.yml', 'App/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Unit tests
+        run: bash scripts/ios-unit-test.sh
+
+  phone-ui:
+    name: Phone UI tests
+    runs-on: macos-26
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('App/project.yml', 'App/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Phone UI tests
+        run: bash scripts/phone-ui-test.sh
+
+      - name: Upload phone UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-ui-screenshots
+          path: build/phone-ui-screenshots
+          if-no-files-found: warn
+
+  screenshots:
+    name: Simulator screenshots
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build and capture demo screens
+        run: bash scripts/ios-simulator-ci.sh
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-screenshots
+          path: .build/ios-simulator-shots/*.png
+          if-no-files-found: ignore
+
+  # Upload waits for unit tests and every-tap UI tests. It does not wait for screenshots.
+  testflight:
+    needs: [linux-tests, ios-tests, phone-ui]
+    if: github.event_name != 'pull_request'
+    concurrency:
+      group: testflight-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Archive script self-test
+        run: scripts/archive-upload.sh --self-test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('App/project.yml', 'App/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Unit tests
+        run: bash scripts/ios-unit-test.sh
+
+      - name: Archive and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: scripts/archive-upload.sh

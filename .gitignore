@@ -3,3 +3,8 @@
 *.p12
 *.pfx
 pairing-qr.png
+/build
+*.p8
+private_keys/
+__pycache__/
+*.pyc
