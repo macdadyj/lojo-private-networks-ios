@@ -519,8 +519,10 @@ private struct SessionScrollOverlay: View {
                 .accessibilityHidden(false)
                 .allowsHitTesting(false)
             if scroll.showJump {
-                JumpToLatestButton { scroll.jumpToLatest() }
-                    .padding(.bottom, session.tmuxNotice == nil || session.tmuxNoticeDismissed ? 16 : 56)
+                JumpToLatestButton(linesFromBottom: scroll.state.linesFromBottom) {
+                    scroll.jumpToLatest()
+                }
+                .padding(.bottom, session.tmuxNotice == nil || session.tmuxNoticeDismissed ? 16 : 56)
             }
         }
     }

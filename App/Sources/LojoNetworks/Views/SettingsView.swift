@@ -81,8 +81,10 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("Version", value: buildNumbers.version)
                         .accessibilityIdentifier("settings.version")
+                        .accessibilityValue(buildNumbers.version)
                     LabeledContent("Build", value: buildNumbers.build)
                         .accessibilityIdentifier("settings.build")
+                        .accessibilityValue(buildNumbers.build)
                 } footer: {
                     Text("LOJO Private Networks · your devices, your network, your control.\nQuestions: team@lojo.engineering")
                 }

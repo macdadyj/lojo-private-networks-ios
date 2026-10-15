@@ -36,8 +36,8 @@ public enum TerminalFlood: Sendable {
 public enum TerminalScrollback: Sendable {
     /// Lines kept above the live viewport. 10k+ so a Grok Build dump is still there.
     public static let historyLines = 10_240
-    /// Stay pinned until the user has pulled this many lines off the bottom.
-    public static let unpinLines = 2
+    /// Any line pulled off the live row unpins. Output then stays put until Jump or a drag back.
+    public static let unpinLines = 0
     public static let defaultCellHeight = 16.0
     public static let momentumDecay = 0.90
     public static let momentumMinSpeed = 12.0
@@ -112,18 +112,47 @@ public enum TerminalScrollback: Sendable {
         linesFromBottom <= unpinLines
     }
 
+    /// Lines stored for `newlines` of output plus the live viewport, capped at the history buffer.
+    public static func historyCount(newlines: Int, viewportRows: Int) -> Int {
+        let rows = max(1, viewportRows)
+        let produced = max(0, newlines) + rows
+        return min(historyLines + rows, produced)
+    }
+
+    public static func jumpTitle(linesFromBottom: Int) -> String {
+        let lines = max(0, linesFromBottom)
+        if lines == 0 { return "Jump to latest" }
+        if lines == 1 { return "Jump to latest · 1 line" }
+        return "Jump to latest · \(lines) lines"
+    }
+
+    /// Whole lines in `translationY`, keeping the fraction so slow drags are not dropped.
+    public static func consumeLines(
+        translationY: Double,
+        cellHeight: Double,
+        remainder: inout Double
+    ) -> Int {
+        let height = cellHeight > 0 ? cellHeight : defaultCellHeight
+        let raw = translationY / height + remainder
+        let lines = Int(raw.rounded(.towardZero))
+        remainder = raw - Double(lines)
+        return lines
+    }
+
     /// Finger moving down (positive `translationY`) reveals older lines.
     public static func applyDrag(
         _ state: inout State,
         translationY: Double,
-        cellHeight: Double
+        cellHeight: Double,
+        remainder: inout Double
     ) {
-        guard state.surface == .history else { return }
-        let height = cellHeight > 0 ? cellHeight : defaultCellHeight
-        let delta = Int((translationY / height).rounded())
-        guard delta != 0 else { return }
+        applyLines(&state, consumeLines(translationY: translationY, cellHeight: cellHeight, remainder: &remainder))
+    }
+
+    public static func applyLines(_ state: inout State, _ lines: Int) {
+        guard state.surface == .history, lines != 0 else { return }
         let ceiling = maxDisp(historyCount: state.historyCount, viewportRows: state.viewportRows)
-        state.linesFromBottom = min(ceiling, max(0, state.linesFromBottom + delta))
+        state.linesFromBottom = min(ceiling, max(0, state.linesFromBottom + lines))
         state.following = isFollowing(linesFromBottom: state.linesFromBottom)
     }
 
@@ -153,13 +182,8 @@ public enum TerminalScrollback: Sendable {
     public static func setSurface(_ state: inout State, _ surface: Surface) {
         if state.surface == surface { return }
         state.surface = surface
-        if surface == .alternate {
-            state.following = true
-            state.linesFromBottom = 0
-        } else {
-            state.following = true
-            state.linesFromBottom = 0
-        }
+        state.following = true
+        state.linesFromBottom = 0
     }
 
     /// Swipe on a TUI: wheel events when the program asked for a mouse, otherwise arrows / page.
@@ -167,10 +191,10 @@ public enum TerminalScrollback: Sendable {
         translationY: Double,
         cellHeight: Double,
         mouseReporting: Bool,
-        viewportRows: Int
+        viewportRows: Int,
+        remainder: inout Double
     ) -> AlternateAction? {
-        let height = cellHeight > 0 ? cellHeight : defaultCellHeight
-        let steps = Int((translationY / height).rounded())
+        let steps = consumeLines(translationY: translationY, cellHeight: cellHeight, remainder: &remainder)
         guard steps != 0 else { return nil }
         let page = max(pageSwipeRows, max(1, viewportRows) / 2)
         if abs(steps) >= page {

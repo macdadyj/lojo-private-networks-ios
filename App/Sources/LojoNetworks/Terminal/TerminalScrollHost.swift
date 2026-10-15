@@ -15,6 +15,8 @@ final class TerminalScrollController: NSObject, ObservableObject {
     private var momentumTask: Task<Void, Never>?
     private var newlineCount = 0
     private var lastTranslation: CGFloat = 0
+    private var dragRemainder = 0.0
+    private var alternateRemainder = 0.0
 
     override init() {
         super.init()
@@ -67,6 +69,7 @@ final class TerminalScrollController: NSObject, ObservableObject {
 
     func jumpToLatest() {
         momentumTask?.cancel()
+        dragRemainder = 0
         TerminalScrollback.jumpToLatest(&state)
         applyToView()
         objectWillChange.send()
@@ -98,7 +101,7 @@ final class TerminalScrollController: NSObject, ObservableObject {
         let term = view.getTerminal()
         let rows = max(1, term.rows)
         state.viewportRows = rows
-        state.historyCount = min(TerminalScrollback.historyLines + rows, max(rows, newlineCount + rows))
+        state.historyCount = TerminalScrollback.historyCount(newlines: newlineCount, viewportRows: rows)
     }
 
     private func cellHeight() -> CGFloat {
@@ -128,8 +131,15 @@ final class TerminalScrollController: NSObject, ObservableObject {
         TerminalScrollback.applyDrag(
             &state,
             translationY: Double(translationY),
-            cellHeight: Double(cellHeight())
+            cellHeight: Double(cellHeight()),
+            remainder: &dragRemainder
         )
+        applyToView()
+        objectWillChange.send()
+    }
+
+    private func applyHistoryLines(_ lines: Int) {
+        TerminalScrollback.applyLines(&state, lines)
         applyToView()
         objectWillChange.send()
     }
@@ -146,7 +156,8 @@ final class TerminalScrollController: NSObject, ObservableObject {
             translationY: Double(translationY),
             cellHeight: Double(cellHeight()),
             mouseReporting: mouseReporting,
-            viewportRows: term.rows
+            viewportRows: term.rows,
+            remainder: &alternateRemainder
         ) else { return }
         lastAlternateAction = action
         switch action {
@@ -178,6 +189,8 @@ final class TerminalScrollController: NSObject, ObservableObject {
         case .began:
             momentumTask?.cancel()
             lastTranslation = 0
+            dragRemainder = 0
+            alternateRemainder = 0
         case .changed:
             let y = gesture.translation(in: view).y
             let delta = y - lastTranslation
@@ -213,7 +226,7 @@ final class TerminalScrollController: NSObject, ObservableObject {
             for delta in deltas {
                 try? await Task.sleep(for: .milliseconds(16))
                 guard let self, !Task.isCancelled else { return }
-                self.applyHistoryDelta(CGFloat(delta) * self.cellHeight())
+                self.applyHistoryLines(delta)
                 if self.state.following { break }
             }
         }
@@ -240,18 +253,24 @@ private final class Proxy: NSObject, UIGestureRecognizerDelegate {
 
 /// Jump-to-live-output chip. Hidden while pinned or on a TUI alternate screen.
 struct JumpToLatestButton: View {
+    let linesFromBottom: Int
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Label("Jump to latest", systemImage: "arrow.down.to.line")
+        Button {
+            Haptics.light()
+            action()
+        } label: {
+            Label(TerminalScrollback.jumpTitle(linesFromBottom: linesFromBottom), systemImage: "arrow.down.to.line")
                 .font(.footnote.weight(.semibold))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(Capsule().fill(.ultraThinMaterial))
+                .background(Capsule().fill(.thinMaterial))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.18), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("terminal.jump")
         .accessibilityLabel("Jump to latest")
+        .accessibilityValue("\(max(0, linesFromBottom)) lines behind")
     }
 }

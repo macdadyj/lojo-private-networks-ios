@@ -94,7 +94,33 @@ final class LojoNetworksUITests: XCTestCase {
         wait(state, contains: "reviewing", timeout: 6)
         XCTAssertTrue(element("terminal.jump").waitForExistence(timeout: 4))
 
+        let jump = element("terminal.jump")
+        XCTAssertTrue(jump.waitForExistence(timeout: 4))
+        let behind = (jump.value as? String) ?? ""
+        XCTAssertTrue(behind.contains("lines behind"), "jump value was '\(behind)'")
+
         tap("terminal.jump")
+        wait(state, contains: "following", timeout: 6)
+        XCTAssertFalse(element("terminal.jump").exists)
+    }
+
+    func testDraggingBackToTheBottomPinsAgain() {
+        launch([
+            "LOJO_DEMO": "1",
+            "LOJO_SCREEN": "terminal",
+            "LOJO_SSH_SCREEN": "scrollback",
+            "LOJO_SSH_PREVIEW": "1",
+            "LOJO_SSH_FLOOD": "400",
+        ])
+        let state = element("terminal.scroll.state")
+        XCTAssertTrue(state.waitForExistence(timeout: 12))
+        let surface = element("terminal.surface")
+        XCTAssertTrue(surface.waitForExistence(timeout: 4))
+        surface.swipeDown(velocity: .fast)
+        wait(state, contains: "reviewing", timeout: 6)
+        surface.swipeUp(velocity: .fast)
+        surface.swipeUp(velocity: .fast)
+        surface.swipeUp(velocity: .fast)
         wait(state, contains: "following", timeout: 6)
         XCTAssertFalse(element("terminal.jump").exists)
     }
