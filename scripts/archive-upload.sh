@@ -229,7 +229,8 @@ xcodebuild archive \
   -clonedSourcePackagesDirPath "${ROOT}/build/SourcePackages" \
   -derivedDataPath "${ROOT}/build/ArchiveDerivedData" \
   DEVELOPMENT_TEAM="${TEAM}" \
-  CURRENT_PROJECT_VERSION="${BUILD_NUMBER}"
+  CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
+  SWIFT_ENABLE_EXPLICIT_MODULES=NO
 
 xcodebuild -exportArchive \
   -archivePath "${ROOT}/build/LojoNetworks.xcarchive" \

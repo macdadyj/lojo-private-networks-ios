@@ -22,7 +22,8 @@ run_phone() {
     CODE_SIGN_IDENTITY="-" \
     DEVELOPMENT_TEAM="" \
     ONLY_ACTIVE_ARCH=YES \
-    ARCHS=arm64
+    ARCHS=arm64 \
+    SWIFT_ENABLE_EXPLICIT_MODULES=NO
 }
 
 set +e

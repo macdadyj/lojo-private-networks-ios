@@ -31,6 +31,7 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   ONLY_ACTIVE_ARCH=YES \
   ARCHS=arm64 \
+  SWIFT_ENABLE_EXPLICIT_MODULES=NO \
   build
 
 APP_PATH="$(find "$DERIVED" -type d -name 'LojoNetworks.app' -path '*iphonesimulator*' | head -1)"
