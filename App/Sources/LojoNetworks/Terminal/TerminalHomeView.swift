@@ -246,7 +246,7 @@ private struct SessionRow: View {
                 Circle().fill(session.phase.tint).frame(width: 9, height: 9)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.host.label).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text(session.statusLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(session.statusLine).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
@@ -435,7 +435,8 @@ extension TerminalSession.Phase {
         case .awaitingPassword: return "Password needed"
         case .connected: return "Connected"
         case .waitingForVPN: return "Waiting for LOJO VPN…"
-        case .reconnecting(let attempt, let delay): return "Reconnecting in \(delay) s (try \(attempt))"
+        case .reconnecting(let attempt, let delay):
+            return SessionLinkMachine.reconnectLine(attempt: attempt, delay: delay, error: nil)
         case .hostKeyChanged: return "HOST KEY CHANGED"
         case .ended(let text): return text
         case .failed(let text): return text

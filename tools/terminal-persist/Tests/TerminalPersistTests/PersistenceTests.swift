@@ -140,6 +140,28 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(waiting.handle(.waitElapsed), [])
     }
 
+    func testInFlightConnectIsNotRestartedByAPathFlap() {
+        var dialing = SessionLinkMachine()
+        XCTAssertEqual(dialing.handle(.networkChanged), [])
+        XCTAssertEqual(dialing.state, .connecting)
+        XCTAssertEqual(dialing.attempt, 0)
+    }
+
+    func testReconnectLineKeepsTheRealError() {
+        XCTAssertEqual(
+            SessionLinkMachine.reconnectLine(attempt: 1, delay: 0, error: nil),
+            "Reconnecting (try 1)"
+        )
+        XCTAssertEqual(
+            SessionLinkMachine.reconnectLine(attempt: 1, delay: 0, error: "Can’t connect: timed out"),
+            "Reconnecting (try 1). Can’t connect: timed out"
+        )
+        XCTAssertEqual(
+            SessionLinkMachine.reconnectLine(attempt: 2, delay: 2, error: "  "),
+            "Reconnecting in 2 s (try 2)"
+        )
+    }
+
     func testNetworkChangeProbesOrRetriesWithoutDroppingInput() {
         var live = liveMachine()
         XCTAssertEqual(live.handle(.networkChanged), [.probeSocket])

@@ -190,7 +190,9 @@ public struct SessionLinkMachine: Equatable, Sendable {
             state = .connecting
             return [.openSocket]
         case .connecting:
-            return [.openSocket]
+            // A path flap must not cancel the dial that is already in flight. Doing that
+            // left the UI on "Reconnecting in 0 s (try 1)" while the next socket never finished.
+            return []
         case .waitingForPath, .failed, .ended:
             return []
         }
@@ -249,6 +251,16 @@ public struct SessionLinkMachine: Equatable, Sendable {
         guard holdsBackgroundTask else { return effects }
         holdsBackgroundTask = false
         return effects + [.endBackgroundTask]
+    }
+
+    /// One line for the session bar and the reconnect banner. A delay of 0 is not shown as "in 0 s".
+    public static func reconnectLine(attempt: Int, delay: Int, error: String?) -> String {
+        let base = delay > 0
+            ? "Reconnecting in \(delay) s (try \(attempt))"
+            : "Reconnecting (try \(attempt))"
+        let reason = error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !reason.isEmpty else { return base }
+        return base + ". " + reason
     }
 
     /// Counts one failed attempt. Twelve failures end in `.failed(retryable: true)` with no further wait.

@@ -70,7 +70,13 @@ public final class SSHConnection: Sendable {
 
         do {
             guard let done = authenticated.withLockedValue({ $0 }) else { throw SSHClientError.disconnected("no pipeline") }
-            try await done.futureResult.get()
+            // TCP connect has its own 10 s timeout. The handshake and login do not, so a VPN
+            // path that accepts the SYN and then drops SSH left the UI on "Reconnecting" forever.
+            try await Self.first(
+                { try await done.futureResult.get() },
+                seconds: 20,
+                timeout: .connectFailed("timed out after 20 s waiting for SSH login (the host accepted the connection, then went quiet)")
+            )
         } catch {
             channel.close(promise: nil)
             let failure = firstError.withLockedValue { $0 } ?? SSHClientError.wrap(error)
@@ -213,7 +219,17 @@ public final class SSHConnection: Sendable {
             onExit: { finished.succeed($0) },
             stdoutOnly: true
         )
-        let exit = try await finished.futureResult.get()
+        let exit: ShellExit
+        do {
+            exit = try await Self.first(
+                { try await finished.futureResult.get() },
+                seconds: 20,
+                timeout: .connectFailed("timed out after 20 s waiting for the remote command")
+            )
+        } catch {
+            channel.close(promise: nil)
+            throw error
+        }
         return (collected.withLockedValue { $0 }, exit)
     }
 
@@ -241,11 +257,38 @@ public final class SSHConnection: Sendable {
         }
         created.futureResult.whenFailure { ready.fail($0) }
         do {
-            let child = try await created.futureResult.get()
-            try await ready.futureResult.get()
+            let child = try await Self.first(
+                { try await created.futureResult.get() },
+                seconds: 20,
+                timeout: .channelRejected("the session (timed out opening a channel)")
+            )
+            try await Self.first(
+                { try await ready.futureResult.get() },
+                seconds: 20,
+                timeout: .channelRejected("the session (timed out starting the shell)")
+            )
             return child
         } catch {
+            channel.close(promise: nil)
             throw firstError.withLockedValue { $0 } ?? SSHClientError.wrap(error)
+        }
+    }
+
+    /// Whichever finishes first: the operation, or the timeout. The loser is cancelled.
+    static func first<T: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> T,
+        seconds: Int,
+        timeout: SSHClientError
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw timeout
+            }
+            guard let winner = try await group.next() else { throw timeout }
+            group.cancelAll()
+            return winner
         }
     }
 }
