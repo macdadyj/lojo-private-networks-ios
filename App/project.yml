@@ -143,6 +143,9 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         CODE_SIGNING_ALLOWED: NO
         GENERATE_INFOPLIST_FILE: YES
+        # The simulator rejects a broadcast appex built as a debug dylib:
+        # "extensionDictionary must be set".
+        ENABLE_DEBUG_DYLIB: NO
     dependencies:
       - target: LojoRemote
   LojoNetworksTests:
