@@ -18,9 +18,7 @@ final class LojoNetworksUITests: XCTestCase {
         tap("settings.demo")
         tap("settings.demo")
         reveal("Theme")
-        if app.staticTexts["Theme"].exists {
-            app.staticTexts["Theme"].tap()
-        }
+        tapLabel("Theme")
         if app.buttons["Light"].waitForExistence(timeout: 2) {
             app.buttons["Light"].tap()
         } else if app.staticTexts["Light"].exists {
@@ -35,9 +33,7 @@ final class LojoNetworksUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Build"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["Version"].exists)
         reveal("Show welcome screens again")
-        if app.buttons["Show welcome screens again"].exists {
-            app.buttons["Show welcome screens again"].tap()
-        }
+        tapLabel("Show welcome screens again")
     }
 
     func testHomeTabsAndSettingsGear() {
@@ -180,6 +176,18 @@ final class LojoNetworksUITests: XCTestCase {
     // MARK: - helpers
 
     /// Scroll the front sheet until `label` is in the accessibility tree.
+    /// The row label in a form is often not the hit target. Tap the button, or the label's point.
+    private func tapLabel(_ label: String) {
+        let button = app.buttons[label]
+        if button.exists, button.isHittable {
+            button.tap()
+            return
+        }
+        let text = app.staticTexts[label]
+        guard text.exists else { return }
+        text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
     private func reveal(_ label: String) {
         let text = app.staticTexts[label]
         let button = app.buttons[label]
