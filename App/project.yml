@@ -60,6 +60,10 @@ targets:
         product: NIOTransportServices
       - package: swift-crypto
         product: Crypto
+    settings:
+      base:
+        # Xcode does not pass NIO's clang shims to a static library that imports them.
+        OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -I$(SRCROOT)/../build/SourcePackages/checkouts/swift-atomics/Sources/_AtomicsShims/include -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOAtomics.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIODarwin.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOLinux.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOOpenBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOFreeBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOPosix.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOWindows.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOWASI.modulemap"
   LojoTrust:
     type: library.static
     platform: iOS
@@ -90,6 +94,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "1.2"
         ENABLE_PREVIEWS: NO
+        OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -I$(SRCROOT)/../build/SourcePackages/checkouts/swift-atomics/Sources/_AtomicsShims/include -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOAtomics.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIODarwin.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOLinux.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOOpenBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOFreeBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOPosix.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOWindows.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOWASI.modulemap"
   LojoTerminalScroll:
     type: library.static
     platform: iOS

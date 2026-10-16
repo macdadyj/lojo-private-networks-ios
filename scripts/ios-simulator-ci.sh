@@ -27,6 +27,7 @@ xcodebuild \
   -scheme LojoNetworks \
   -configuration Debug \
   -destination "platform=iOS Simulator,id=$UDID" \
+  -clonedSourcePackagesDirPath "$REPO/build/SourcePackages" \
   -derivedDataPath "$DERIVED" \
   CODE_SIGNING_ALLOWED=NO \
   ONLY_ACTIVE_ARCH=YES \
