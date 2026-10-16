@@ -78,6 +78,16 @@ targets:
       - target: LojoSSH
       - target: LojoTrust
       - target: LojoTerminalScroll
+      - package: swift-nio
+        product: NIOConcurrencyHelpers
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio
+        product: NIOPosix
+      - package: swift-nio-transport-services
+        product: NIOTransportServices
+      - package: swift-atomics
+        product: Atomics
       - package: swift-nio-ssh
         product: NIOSSH
       - package: swift-crypto
