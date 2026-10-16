@@ -78,10 +78,15 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// Latest saved host, so the persistence toggle applies on the next attach.
     var displayHost: SSHHost { center.hosts.hosts.first { $0.id == host.id } ?? host }
 
+    /// Last connect or login failure. Shown while reconnecting, and on the failure card when retries stop.
+    private(set) var lastConnectError: String?
+
     var statusLine: String {
         switch phase {
         case .connected:
             return shellKind == .tmux ? TmuxCommand.keptOnHostStatus : "Connected"
+        case .reconnecting(let attempt, let delay):
+            return SessionLinkMachine.reconnectLine(attempt: attempt, delay: delay, error: lastConnectError)
         case .waitingForVPN:
             if center.access(to: displayHost.address) == .needsSiteWiFi { return "Needs site Wi‑Fi" }
             return phase.summary
@@ -273,6 +278,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             do {
                 try await self.establish(attempt: attempt)
                 guard self.attemptID == attempt, !Task.isCancelled, !self.userClosed else { return }
+                self.lastConnectError = nil
                 self.apply(self.linkMachine.handle(.connectSucceeded))
                 self.startKeepAlive()
             } catch is CancellationError {
@@ -308,15 +314,23 @@ final class TerminalSession: ObservableObject, Identifiable {
             passwordPrompt: { [weak self] in await self?.askPassword() },
             verifyHostKey: { [weak self] key in await self?.verify(key) ?? false }
         )
-        guard attempt == attemptID, !Task.isCancelled, !userClosed else {
+        do {
+            guard attempt == attemptID, !Task.isCancelled, !userClosed else {
+                conn.close()
+                throw CancellationError()
+            }
+            try await finishEstablish(conn, host: saved, attempt: attempt)
+        } catch {
             conn.close()
-            throw CancellationError()
+            throw error
         }
+    }
 
+    private func finishEstablish(_ conn: SSHConnection, host: SSHHost, attempt: Int) async throws {
         let term = terminalView.getTerminal()
         let cols = TmuxCommand.clampDimension(term.cols, fallback: 80)
         let rows = TmuxCommand.clampDimension(term.rows, fallback: 24)
-        let kind = try await remoteKind(on: conn, host: saved, attempt: attempt)
+        let kind = try await remoteKind(on: conn, host: host, attempt: attempt)
 
         generation += 1
         let token = generation
@@ -325,7 +339,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             switch kind {
             case .tmux:
                 let attach = TmuxAttach(
-                    session: tmuxSessionName, columns: cols, rows: rows, mouse: saved.tmuxMouse
+                    session: tmuxSessionName, columns: cols, rows: rows, mouse: host.tmuxMouse
                 )
                 channel = try await conn.openCommand(
                     attach.execCommand, term: TmuxCommand.term, cols: cols, rows: rows,
@@ -410,11 +424,20 @@ final class TerminalSession: ObservableObject, Identifiable {
             return
         }
         if error is TerminalError {
+            lastConnectError = Self.message(for: error)
             apply(linkMachine.handle(.pathUnavailable))
             return
         }
+        let text = Self.message(for: error)
+        lastConnectError = text
         if Self.isRetryable(error) {
             apply(linkMachine.handle(.connectFailed(retryable: true)))
+            if case .failed = linkMachine.state {
+                phase = .failed(text)
+                failure = error as? SSHClientError
+                _ = terminalView.resignFirstResponder()
+                Haptics.error()
+            }
             return
         }
         failed(error)

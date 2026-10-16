@@ -178,10 +178,8 @@ private struct SessionPane: View {
     }
 
     private var reconnectDetail: String? {
-        if case .reconnecting(_, let delay) = session.phase, delay > 0 {
-            return "Trying again in \(delay) s"
-        }
-        return nil
+        guard case .reconnecting(let attempt, let delay) = session.phase else { return nil }
+        return SessionLinkMachine.reconnectLine(attempt: attempt, delay: delay, error: session.lastConnectError)
     }
 
     @ViewBuilder
@@ -228,6 +226,7 @@ private struct LinkBanner: View {
                     Text(detail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
@@ -240,10 +239,10 @@ private struct LinkBanner: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .accessibilityLabel(title)
+        .accessibilityLabel(detail.map { "\(title). \($0)" } ?? title)
     }
 }
 
@@ -262,7 +261,8 @@ private struct SessionBar: View {
                 Text(session.statusLine)
                     .font(.caption2)
                     .foregroundStyle(session.phase == .connected ? Color.secondary : session.phase.tint)
-                    .lineLimit(1)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 4)
             bar("square.stack", "Sessions on this host", id: "terminal.sessions", action: onSessions)
