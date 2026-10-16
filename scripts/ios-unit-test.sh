@@ -13,7 +13,7 @@ xcodebuild test \
   -destination "platform=iOS Simulator,id=${UDID}" \
   -clonedSourcePackagesDirPath build/SourcePackages \
   -derivedDataPath build/DerivedData \
-  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_ALLOWED=YES \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="-" \
   DEVELOPMENT_TEAM="" \

@@ -29,7 +29,10 @@ xcodebuild \
   -destination "platform=iOS Simulator,id=$UDID" \
   -clonedSourcePackagesDirPath "$REPO/build/SourcePackages" \
   -derivedDataPath "$DERIVED" \
-  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="-" \
+  DEVELOPMENT_TEAM="" \
   ONLY_ACTIVE_ARCH=YES \
   ARCHS=arm64 \
   SWIFT_ENABLE_EXPLICIT_MODULES=NO \
@@ -83,5 +86,32 @@ shot scrollback \
 shot settings-build \
   SIMCTL_CHILD_LOJO_DEMO=1 \
   SIMCTL_CHILD_LOJO_SCREEN=settings
+
+shot remote-devices \
+  SIMCTL_CHILD_LOJO_DEMO=1 \
+  SIMCTL_CHILD_LOJO_SCREEN=remote \
+  SIMCTL_CHILD_LOJO_REMOTE_DEMO=1
+
+shot remote-panel \
+  SIMCTL_CHILD_LOJO_DEMO=1 \
+  SIMCTL_CHILD_LOJO_SCREEN=remote \
+  SIMCTL_CHILD_LOJO_REMOTE_DEMO=1 \
+  SIMCTL_CHILD_LOJO_REMOTE_SCREEN=panel
+
+shot remote-schedule \
+  SIMCTL_CHILD_LOJO_DEMO=1 \
+  SIMCTL_CHILD_LOJO_SCREEN=remote \
+  SIMCTL_CHILD_LOJO_REMOTE_DEMO=1 \
+  SIMCTL_CHILD_LOJO_REMOTE_SCREEN=schedule
+
+shot remote-screen \
+  SIMCTL_CHILD_LOJO_DEMO=1 \
+  SIMCTL_CHILD_LOJO_SCREEN=remote \
+  SIMCTL_CHILD_LOJO_REMOTE_DEMO=1 \
+  SIMCTL_CHILD_LOJO_REMOTE_SCREEN=screen
+
+shot remote-device \
+  SIMCTL_CHILD_LOJO_SCREEN=device \
+  SIMCTL_CHILD_LOJO_REMOTE_DEMO=1
 
 xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true

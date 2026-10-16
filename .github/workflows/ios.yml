@@ -27,6 +27,11 @@ jobs:
       - name: Scrollback tests
         working-directory: tools/terminal-scrollback
         run: swift test
+      - name: Remote relay
+        run: node relay/server.js --self-test
+      - name: iPhone Remote Controller tests
+        working-directory: tools/remote-controller
+        run: swift test
 
   ios-tests:
     name: iOS unit tests
@@ -136,9 +141,49 @@ jobs:
           path: .build/ios-simulator-shots/*.png
           if-no-files-found: ignore
 
-  # Upload waits for unit tests and every-tap UI tests. It does not wait for screenshots.
+  remote-pair:
+    name: Remote controller pair
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('App/project.yml', 'App/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Two simulators and the relay
+        run: bash scripts/remote-pair-ci.sh
+
+      - name: Upload pair screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-pair-screenshots
+          path: build/remote-pair-screenshots
+          if-no-files-found: warn
+
+  # Upload waits for unit tests, every-tap UI tests, and the two-simulator relay pair.
   testflight:
-    needs: [linux-tests, ios-tests, phone-ui]
+    needs: [linux-tests, ios-tests, phone-ui, remote-pair]
     if: github.event_name != 'pull_request'
     concurrency:
       group: testflight-${{ github.repository }}

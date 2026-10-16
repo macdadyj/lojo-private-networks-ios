@@ -193,7 +193,7 @@ final class LojoNetworksUITests: XCTestCase {
         let button = app.buttons[label]
         func visible() -> Bool { text.exists || button.exists }
         if text.waitForExistence(timeout: 1) || button.exists { return }
-        for _ in 0..<5 {
+        for _ in 0..<8 {
             app.swipeUp()
             if visible() { return }
         }

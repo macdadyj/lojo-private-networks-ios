@@ -79,6 +79,9 @@ targets:
       - target: LojoSSH
       - target: LojoTrust
       - target: LojoTerminalScroll
+      - target: LojoRemote
+      - target: LojoBroadcast
+        embed: true
       - package: swift-nio
         product: NIOConcurrencyHelpers
       - package: swift-nio
@@ -114,13 +117,48 @@ targets:
     platform: iOS
     sources:
       - path: Sources/LojoTerminalScroll
+  LojoRemote:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/LojoRemote
+  LojoBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/BroadcastUpload
+    info:
+      properties:
+        CFBundleDisplayName: iPhone Remote Controller
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).SampleHandler"
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.broadcast
+        PRODUCT_NAME: LojoBroadcast
+        MARKETING_VERSION: "1.2"
+        CURRENT_PROJECT_VERSION: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGNING_ALLOWED: NO
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: LojoRemote
   LojoNetworksTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests/LojoNetworksTests
+      - path: Tests/LojoRemoteTests
     dependencies:
       - target: LojoTerminalScroll
+      - target: LojoRemote
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.tests

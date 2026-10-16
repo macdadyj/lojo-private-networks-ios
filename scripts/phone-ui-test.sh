@@ -17,7 +17,7 @@ run_phone() {
     -clonedSourcePackagesDirPath build/SourcePackages \
     -derivedDataPath build/DerivedDataUI \
     -resultBundlePath build/phone-ui-screenshots/LojoNetworksUI.xcresult \
-    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_ALLOWED=YES \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGN_IDENTITY="-" \
     DEVELOPMENT_TEAM="" \

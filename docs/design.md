@@ -74,6 +74,15 @@ refuses (409) when the device is offline.
    *Explore the demo*; empty states for no devices / no events / no locations / offline; a demo
    network (**Juniper Mesa Ranch**) with realistic devices, events, locations, procedurally drawn
    camera stills, simulated capture latency and GPIO round-trips. Demo is clearly badged.
+7. **iPhone Remote Controller** — a mode of this app. The spare iPhone registers with the relay
+   (`relay/server.js` on the site gateway), reports online/offline and battery, and plays bundled
+   sounds or an Apple Music playlist in the background. Bedtime white noise starts at 8:00 PM and
+   morning off stops it at 6:00 AM, on the spare phone. Shortcuts and Siri can play a sound, stop,
+   set volume, play a Music playlist, start a sleep timer, and report status. The controller runs
+   a listed Shortcut by name. Samples run in the app. A Shortcut made in the Shortcuts app opens
+   only while that phone is in the foreground or already playing audio. The live screen is a
+   ReplayKit broadcast the owner starts, and it is view-only. The help screen says the app cannot
+   read iMessages, move Home Screen icons, or inject taps.
 
 ## Design system
 

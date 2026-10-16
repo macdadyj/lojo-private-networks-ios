@@ -4,7 +4,7 @@ import Foundation
 /// They can only be set by a developer launch over USB, never by a customer.
 struct LaunchOptions: Sendable {
     enum Screen: String, Sendable {
-        case home, detail, activity, map, check, onboarding, settings, setup, terminal
+        case home, detail, activity, map, check, onboarding, settings, setup, terminal, remote, device
     }
 
     var demo: Bool?
@@ -25,6 +25,19 @@ struct LaunchOptions: Sendable {
     var confirmPairing = false
     /// Remove the pinned site CA at launch.
     var unpair = false
+    /// "device" runs iPhone Remote Controller on this phone. "controller" lists spare phones.
+    var remoteRole: String?
+    var relayURLText: String?
+    var networkCode: String?
+    var remoteName: String?
+    var remotePhoneID: String?
+    var remoteBattery: Int?
+    /// Frozen clock `HH:mm` so a schedule can be tested without waiting for the wall clock.
+    var remoteNow: String?
+    var remotePreviewFrame = false
+    var remoteDemo = false
+    /// panel, schedule, viewer, or help. Opens that iPhone Remote Controller screen.
+    var remoteScreen: String?
 
     static let current: LaunchOptions = {
         let env = ProcessInfo.processInfo.environment
@@ -42,9 +55,12 @@ struct LaunchOptions: Sendable {
         autotest = text("LOJO_AUTOTEST")
         confirmPairing = flag("LOJO_PAIR_CONFIRM") ?? false
         #endif
+        let screenText = text("LOJO_SCREEN")?.lowercased()
+        var role = text("LOJO_REMOTE_ROLE")?.lowercased()
+        if role == nil, screenText == "device" { role = "device" }
         return LaunchOptions(
             demo: flag("LOJO_DEMO"),
-            screen: text("LOJO_SCREEN").flatMap { Screen(rawValue: $0.lowercased()) },
+            screen: screenText.flatMap { Screen(rawValue: $0) },
             device: text("LOJO_DEVICE"),
             simulateOffline: flag("LOJO_SIMULATE_OFFLINE") ?? false,
             confirmPin: text("LOJO_CONFIRM_GPIO"),
@@ -55,7 +71,17 @@ struct LaunchOptions: Sendable {
             autotest: autotest,
             pairingCode: text("LOJO_PAIR"),
             confirmPairing: confirmPairing,
-            unpair: flag("LOJO_UNPAIR") ?? false
+            unpair: flag("LOJO_UNPAIR") ?? false,
+            remoteRole: role,
+            relayURLText: text("LOJO_RELAY_URL"),
+            networkCode: text("LOJO_NETWORK_CODE"),
+            remoteName: text("LOJO_REMOTE_NAME"),
+            remotePhoneID: text("LOJO_REMOTE_ID"),
+            remoteBattery: text("LOJO_REMOTE_BATTERY").flatMap { Int($0) },
+            remoteNow: text("LOJO_REMOTE_NOW"),
+            remotePreviewFrame: flag("LOJO_REMOTE_PREVIEW_FRAME") ?? false,
+            remoteDemo: flag("LOJO_REMOTE_DEMO") ?? false,
+            remoteScreen: text("LOJO_REMOTE_SCREEN")?.lowercased()
         )
     }()
 }
