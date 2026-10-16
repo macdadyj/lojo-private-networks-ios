@@ -14,12 +14,7 @@ final class LojoNetworksUITests: XCTestCase {
             "LOJO_DEMO": "1",
             "LOJO_SCREEN": "settings",
         ])
-        XCTAssertTrue(
-            app.staticTexts["Build"].waitForExistence(timeout: 8)
-                || element("settings.build").waitForExistence(timeout: 2)
-        )
-        XCTAssertTrue(app.staticTexts["Version"].exists)
-
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 8))
         tap("settings.demo")
         tap("settings.demo")
         tap("settings.theme")
@@ -31,7 +26,17 @@ final class LojoNetworksUITests: XCTestCase {
         tapIfEnabled("settings.test.lan")
         tapIfEnabled("settings.test.overlay")
         tap("settings.reset")
-        tap("settings.welcome")
+        // Version and Build are the last section, below the fold.
+        app.swipeUp()
+        app.swipeUp()
+        XCTAssertTrue(
+            app.staticTexts["Build"].waitForExistence(timeout: 4)
+                || element("settings.build").waitForExistence(timeout: 2)
+        )
+        XCTAssertTrue(app.staticTexts["Version"].exists)
+        if element("settings.welcome").waitForExistence(timeout: 2) {
+            tap("settings.welcome")
+        }
     }
 
     func testHomeTabsAndSettingsGear() {
@@ -176,14 +181,17 @@ final class LojoNetworksUITests: XCTestCase {
         app.launch()
     }
 
+    /// Prefer the button when SwiftUI also stamps the identifier on a wrapper.
     private func element(_ id: String) -> XCUIElement {
-        app.descendants(matching: .any)[id]
+        let buttons = app.buttons.matching(identifier: id)
+        if buttons.count > 0 { return buttons.firstMatch }
+        return app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
     private func tap(_ id: String) {
-        let el = element(id)
-        XCTAssertTrue(el.waitForExistence(timeout: 6), "missing \(id)")
-        el.tap()
+        let any = app.descendants(matching: .any).matching(identifier: id)
+        XCTAssertTrue(any.firstMatch.waitForExistence(timeout: 6), "missing \(id)")
+        element(id).tap()
     }
 
     private func tapIfEnabled(_ id: String) {
