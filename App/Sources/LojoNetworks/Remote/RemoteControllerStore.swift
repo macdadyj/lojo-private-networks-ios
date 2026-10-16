@@ -197,7 +197,7 @@ extension RemotePhone {
         charging: false,
         playback: .idle,
         schedules: [],
-        music: [MusicTrack(id: "music:demo", title: "Night Drive", artist: "Sample")],
+        music: [LojoRemote.MusicTrack(id: "music:demo", title: "Night Drive", artist: "Sample")],
         shortcuts: SampleAutomations.shortcuts
     )
 }

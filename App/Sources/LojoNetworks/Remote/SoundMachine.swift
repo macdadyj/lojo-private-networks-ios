@@ -144,11 +144,11 @@ final class SoundMachine {
         )
     }
 
-    func musicCatalog() -> [MusicTrack] {
+    func musicCatalog() -> [LojoRemote.MusicTrack] {
         guard MPMediaLibrary.authorizationStatus() == .authorized else { return [] }
         let items = MPMediaQuery.songs().items ?? []
         return items.prefix(40).map { item in
-            MusicTrack(
+            LojoRemote.MusicTrack(
                 id: "music:\(item.persistentID)",
                 title: item.title ?? "Untitled",
                 artist: item.artist ?? ""

@@ -9,15 +9,19 @@ enum RemoteSoundChoice: String, AppEnum {
     case rain
     case fan
 
-    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Sound")
+    static var typeDisplayRepresentation: TypeDisplayRepresentation {
+        TypeDisplayRepresentation(name: "Sound")
+    }
 
-    static var caseDisplayRepresentations: [RemoteSoundChoice: DisplayRepresentation] = [
-        .whiteNoise: "White Noise",
-        .pinkNoise: "Pink Noise",
-        .brownNoise: "Brown Noise",
-        .rain: "Rain",
-        .fan: "Fan",
-    ]
+    static var caseDisplayRepresentations: [RemoteSoundChoice: DisplayRepresentation] {
+        [
+            .whiteNoise: "White Noise",
+            .pinkNoise: "Pink Noise",
+            .brownNoise: "Brown Noise",
+            .rain: "Rain",
+            .fan: "Fan",
+        ]
+    }
 
     var soundID: String {
         switch self {
@@ -31,9 +35,9 @@ enum RemoteSoundChoice: String, AppEnum {
 }
 
 struct PlaySoundIntent: AppIntent {
-    static var title: LocalizedStringResource = "Play sound"
-    static var description = IntentDescription("Plays a sound-machine sound on this iPhone.")
-    static var openAppWhenRun = false
+    static var title: LocalizedStringResource { "Play sound" }
+    static var description: IntentDescription { IntentDescription("Plays a sound-machine sound on this iPhone.") }
+    static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Sound", default: .whiteNoise)
     var sound: RemoteSoundChoice
@@ -49,9 +53,9 @@ struct PlaySoundIntent: AppIntent {
 }
 
 struct StopSoundIntent: AppIntent {
-    static var title: LocalizedStringResource = "Stop"
-    static var description = IntentDescription("Stops sound on this iPhone.")
-    static var openAppWhenRun = false
+    static var title: LocalizedStringResource { "Stop" }
+    static var description: IntentDescription { IntentDescription("Stops sound on this iPhone.") }
+    static var openAppWhenRun: Bool { false }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         await MainActor.run { RemoteIntentBridge.shared.stop() }
@@ -60,9 +64,9 @@ struct StopSoundIntent: AppIntent {
 }
 
 struct SetVolumeIntent: AppIntent {
-    static var title: LocalizedStringResource = "Set volume"
-    static var description = IntentDescription("Sets the volume of the built-in sounds on this iPhone.")
-    static var openAppWhenRun = false
+    static var title: LocalizedStringResource { "Set volume" }
+    static var description: IntentDescription { IntentDescription("Sets the volume of the built-in sounds on this iPhone.") }
+    static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Percent", default: 60)
     var percent: Int
@@ -75,9 +79,9 @@ struct SetVolumeIntent: AppIntent {
 }
 
 struct PlayPlaylistIntent: AppIntent {
-    static var title: LocalizedStringResource = "Play Music playlist"
-    static var description = IntentDescription("Plays an Apple Music playlist that is on this iPhone.")
-    static var openAppWhenRun = false
+    static var title: LocalizedStringResource { "Play Music playlist" }
+    static var description: IntentDescription { IntentDescription("Plays an Apple Music playlist that is on this iPhone.") }
+    static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Playlist")
     var playlist: String
@@ -94,9 +98,9 @@ struct PlayPlaylistIntent: AppIntent {
 }
 
 struct SleepTimerIntent: AppIntent {
-    static var title: LocalizedStringResource = "Sleep timer"
-    static var description = IntentDescription("Stops sound on this iPhone after a number of minutes.")
-    static var openAppWhenRun = false
+    static var title: LocalizedStringResource { "Sleep timer" }
+    static var description: IntentDescription { IntentDescription("Stops sound on this iPhone after a number of minutes.") }
+    static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Minutes", default: 30)
     var minutes: Int
@@ -110,9 +114,9 @@ struct SleepTimerIntent: AppIntent {
 }
 
 struct ReportStatusIntent: AppIntent {
-    static var title: LocalizedStringResource = "Report status"
-    static var description = IntentDescription("Says what this iPhone is playing.")
-    static var openAppWhenRun = false
+    static var title: LocalizedStringResource { "Report status" }
+    static var description: IntentDescription { IntentDescription("Says what this iPhone is playing.") }
+    static var openAppWhenRun: Bool { false }
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         let text: String = await MainActor.run { RemoteIntentBridge.shared.statusText() }

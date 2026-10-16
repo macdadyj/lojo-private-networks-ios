@@ -151,6 +151,7 @@ targets:
     sources:
       - path: Tests/LojoNetworksTests
       - path: Tests/LojoRemoteTests
+      - path: Tests/BroadcastTests
     dependencies:
       - target: LojoTerminalScroll
       - target: LojoRemote

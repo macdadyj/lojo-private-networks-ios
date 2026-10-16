@@ -25,7 +25,6 @@ cleanup() {
   fi
   if [[ -n "${CONTROLLER_UDID}" ]]; then
     xcrun simctl io "${CONTROLLER_UDID}" screenshot "${SHOTS}/controller.png" >/dev/null 2>&1 || true
-    xcrun simctl delete "${CONTROLLER_UDID}" >/dev/null 2>&1 || true
   fi
   mkdir -p "${SHOTS}"
   cp -f /tmp/lojo-remote-ui/*.png "${SHOTS}/" 2>/dev/null || true
@@ -44,19 +43,10 @@ done
 curl -sf "http://127.0.0.1:${PORT}/health" | grep -q lojo-remote-relay
 
 bash scripts/ios-prepare.sh
-read -r DEVICE_TYPE RUNTIME < <(python3 - <<'PY'
-import json, subprocess
-devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devicetypes", "-j"], text=True))
-runtimes = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "-j"], text=True))
-iphones = [item for item in devices.get("devicetypes", []) if item.get("name", "").startswith("iPhone")]
-ios = [item for item in runtimes.get("runtimes", []) if item.get("isAvailable") and "iOS" in item.get("name", "")]
-if not iphones or not ios:
-    raise SystemExit("No iPhone simulator runtime")
-print(iphones[-1]["identifier"], ios[-1]["identifier"])
-PY
-)
-DEVICE_UDID="$(xcrun simctl create "LOJO Spare iPhone" "${DEVICE_TYPE}" "${RUNTIME}")"
-CONTROLLER_UDID="$(xcrun simctl create "LOJO Controller iPhone" "${DEVICE_TYPE}" "${RUNTIME}")"
+# Clone an already-compatible iPhone. Creating from the last device type fails
+# when that type does not match the newest runtime ("Incompatible device").
+CONTROLLER_UDID="$(bash scripts/ios-sim-udid.sh)"
+DEVICE_UDID="$(xcrun simctl clone "${CONTROLLER_UDID}" "LOJO Spare iPhone")"
 echo "Spare ${DEVICE_UDID}"
 echo "Controller ${CONTROLLER_UDID}"
 
