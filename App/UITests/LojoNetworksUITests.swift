@@ -17,25 +17,26 @@ final class LojoNetworksUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 8))
         tap("settings.demo")
         tap("settings.demo")
-        tap("settings.theme")
+        reveal("Theme")
+        if app.staticTexts["Theme"].exists {
+            app.staticTexts["Theme"].tap()
+        }
         if app.buttons["Light"].waitForExistence(timeout: 2) {
             app.buttons["Light"].tap()
         } else if app.staticTexts["Light"].exists {
             app.staticTexts["Light"].tap()
         }
+        reveal("Test")
         tapIfEnabled("settings.test.lan")
         tapIfEnabled("settings.test.overlay")
+        reveal("Reset to defaults")
         tap("settings.reset")
-        // Version and Build are the last section, below the fold.
-        app.swipeUp()
-        app.swipeUp()
-        XCTAssertTrue(
-            app.staticTexts["Build"].waitForExistence(timeout: 4)
-                || element("settings.build").waitForExistence(timeout: 2)
-        )
+        reveal("Build")
+        XCTAssertTrue(app.staticTexts["Build"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["Version"].exists)
-        if element("settings.welcome").waitForExistence(timeout: 2) {
-            tap("settings.welcome")
+        reveal("Show welcome screens again")
+        if app.buttons["Show welcome screens again"].exists {
+            app.buttons["Show welcome screens again"].tap()
         }
     }
 
@@ -51,7 +52,9 @@ final class LojoNetworksUITests: XCTestCase {
         app.tabBars.buttons["Terminal"].tap()
         app.tabBars.buttons["Network"].tap()
         tap("home.settings")
-        XCTAssertTrue(element("settings.build").waitForExistence(timeout: 6))
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 6))
+        reveal("Build")
+        XCTAssertTrue(app.staticTexts["Build"].waitForExistence(timeout: 4))
         tap("settings.done")
     }
 
@@ -175,6 +178,18 @@ final class LojoNetworksUITests: XCTestCase {
     }
 
     // MARK: - helpers
+
+    /// Scroll the front sheet until `label` is in the accessibility tree.
+    private func reveal(_ label: String) {
+        let text = app.staticTexts[label]
+        let button = app.buttons[label]
+        func visible() -> Bool { text.exists || button.exists }
+        if text.waitForExistence(timeout: 1) || button.exists { return }
+        for _ in 0..<5 {
+            app.swipeUp()
+            if visible() { return }
+        }
+    }
 
     private func launch(_ environment: [String: String]) {
         app.launchEnvironment = environment
