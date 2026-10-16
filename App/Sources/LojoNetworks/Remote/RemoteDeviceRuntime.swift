@@ -108,10 +108,12 @@ final class RemoteDeviceRuntime: ObservableObject {
         playback = machine.snapshot(now: now)
         shortcuts = RemoteIntentBridge.shared.shortcuts()
         batteryLabel = batteryText()
-        if launch.remotePreviewFrame, Date().timeIntervalSince(lastPreview) > 1, let client = client() {
+        if launch.remotePreviewFrame, Date().timeIntervalSince(lastPreview) > 1 {
             lastPreview = Date()
             let jpeg = PreviewFrame.jpeg(title: phoneName)
-            if !jpeg.isEmpty { try? await client.postFrame(jpeg, phoneID: phoneID) }
+            if !jpeg.isEmpty {
+                ScreenFramePoster().post(jpeg)
+            }
         }
     }
 

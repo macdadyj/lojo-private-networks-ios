@@ -1,28 +1,29 @@
 import Foundation
-import LojoRemote
+#if canImport(Network)
 import Network
 
-/// Accepts JPEG frames from the ReplayKit broadcast extension on localhost.
-final class FrameInbox: @unchecked Sendable {
+/// Accepts the JPEG posts the ReplayKit broadcast extension sends to localhost.
+public final class FrameInbox: @unchecked Sendable {
     private let lock = NSLock()
     private var onFrame: (@Sendable (Data) -> Void)?
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "lojo.frame.inbox")
 
-    func setHandler(_ handler: @escaping @Sendable (Data) -> Void) {
+    public init() {}
+
+    public func setHandler(_ handler: @escaping @Sendable (Data) -> Void) {
         lock.lock()
         onFrame = handler
         lock.unlock()
     }
 
-    func start() {
+    public func start(port: UInt16 = ScreenRelay.localPort) {
         lock.lock()
         let already = listener != nil
         lock.unlock()
-        guard !already else { return }
-        guard let port = NWEndpoint.Port(rawValue: ScreenRelay.localPort) else { return }
+        guard !already, let nwPort = NWEndpoint.Port(rawValue: port) else { return }
         do {
-            let listener = try NWListener(using: .tcp, on: port)
+            let listener = try NWListener(using: .tcp, on: nwPort)
             listener.newConnectionHandler = { [weak self] connection in
                 self?.accept(connection)
             }
@@ -31,7 +32,7 @@ final class FrameInbox: @unchecked Sendable {
             self.listener = listener
             lock.unlock()
         } catch {
-            // The spare phone can still play sound. Live frames wait until this port is free.
+            // Sound keeps working. Live frames wait until this port is free.
         }
     }
 
@@ -87,3 +88,4 @@ private final class InboxBuffer: @unchecked Sendable {
         lock.unlock()
     }
 }
+#endif

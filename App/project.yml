@@ -127,15 +127,10 @@ targets:
     platform: iOS
     sources:
       - path: Sources/BroadcastUpload
+        excludes:
+          - Info.plist
     info:
-      properties:
-        CFBundleDisplayName: iPhone Remote Controller
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
-          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).SampleHandler"
-          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+      path: Sources/BroadcastUpload/Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.broadcast
@@ -147,7 +142,7 @@ targets:
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
         CODE_SIGNING_ALLOWED: NO
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: NO
     dependencies:
       - target: LojoRemote
   LojoNetworksTests:

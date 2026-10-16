@@ -27,6 +27,8 @@ cleanup() {
     xcrun simctl io "${CONTROLLER_UDID}" screenshot "${SHOTS}/controller.png" >/dev/null 2>&1 || true
     xcrun simctl delete "${CONTROLLER_UDID}" >/dev/null 2>&1 || true
   fi
+  mkdir -p "${SHOTS}"
+  cp -f /tmp/lojo-remote-ui/*.png "${SHOTS}/" 2>/dev/null || true
   rm -f /tmp/lojo-remote-pair
 }
 trap cleanup EXIT
@@ -75,6 +77,11 @@ xcodebuild build-for-testing \
 APP_PATH="$(find "${DERIVED}" -type d -name 'LojoNetworks.app' -path '*iphonesimulator*' | head -1)"
 if [[ -z "${APP_PATH}" ]]; then
   echo "LojoNetworks.app was not produced" >&2
+  exit 1
+fi
+if [[ ! -d "${APP_PATH}/PlugIns/LojoBroadcast.appex" ]]; then
+  echo "The ReplayKit broadcast extension was not embedded in LojoNetworks.app" >&2
+  find "${APP_PATH}" -name '*.appex' -o -name 'PlugIns' >&2 || true
   exit 1
 fi
 

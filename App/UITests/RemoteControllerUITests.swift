@@ -32,6 +32,7 @@ final class RemoteControllerUITests: XCTestCase {
         tap("remote.help.done")
 
         tap("remote.device.row")
+        saveShot("controller-panel")
         tap("remote.shortcut.bedtime-white-noise")
         waitPlayback("White Noise")
         tap("remote.stop")
@@ -46,11 +47,20 @@ final class RemoteControllerUITests: XCTestCase {
         tap("remote.sleep.15")
         tap("remote.sleep.off")
         tap("remote.schedule")
+        saveShot("controller-schedule")
         tap("remote.schedule.add-overnight")
         tap("remote.schedule.save")
         tap("remote.screen")
         XCTAssertTrue(app.staticTexts["Live screen"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "remote.screen.image").firstMatch.exists)
+        saveShot("controller-screen")
+    }
+
+    private func saveShot(_ name: String) {
+        let dir = URL(fileURLWithPath: "/tmp/lojo-remote-ui")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let png = XCUIScreen.main.screenshot().pngRepresentation
+        try? png.write(to: dir.appendingPathComponent("\(name).png"))
     }
 
     private func tap(_ id: String) {
@@ -100,6 +110,7 @@ final class RemotePairUITests: XCTestCase {
         let row = app.descendants(matching: .any).matching(identifier: "remote.device.row").firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 4))
         row.tap()
+        saveShot("controller-panel")
 
         let bedtime = app.descendants(matching: .any).matching(identifier: "remote.shortcut.bedtime-white-noise").firstMatch
         XCTAssertTrue(bedtime.waitForExistence(timeout: 15))
@@ -114,6 +125,7 @@ final class RemotePairUITests: XCTestCase {
         wait(app, playback: "Stopped", timeout: 20)
 
         app.buttons["remote.schedule"].tap()
+        saveShot("controller-schedule")
         app.buttons["remote.schedule.add-overnight"].tap()
         app.buttons["remote.schedule.save"].tap()
         wait(app, playback: "White Noise", timeout: 20)
@@ -121,6 +133,14 @@ final class RemotePairUITests: XCTestCase {
         app.buttons["remote.screen"].tap()
         let image = app.descendants(matching: .any).matching(identifier: "remote.screen.image").firstMatch
         XCTAssertTrue(image.waitForExistence(timeout: 20), "live screen frame did not arrive from the relay")
+        saveShot("controller-screen")
+    }
+
+    private func saveShot(_ name: String) {
+        let dir = URL(fileURLWithPath: "/tmp/lojo-remote-ui")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let png = XCUIScreen.main.screenshot().pngRepresentation
+        try? png.write(to: dir.appendingPathComponent("\(name).png"))
     }
 
     private func wait(_ app: XCUIApplication, playback needle: String, timeout: TimeInterval) {
