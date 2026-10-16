@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import LojoSSH
+import LojoTerminalScroll
 import SwiftTerm
 import UIKit
 
@@ -70,6 +71,10 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     var hostView: UIView { terminalView }
     var isLive: Bool { phase == .connected }
+
+    func attachScroll() {
+        scroll.attach(terminalView)
+    }
     /// Latest saved host, so the persistence toggle applies on the next attach.
     var displayHost: SSHHost { center.hosts.hosts.first { $0.id == host.id } ?? host }
 
@@ -107,6 +112,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     private var pendingCommand: String?
     private var linkMachine = SessionLinkMachine()
     private var inputBuffer = TerminalInputBuffer()
+    let scroll = TerminalScrollController()
 
     init(host: SSHHost, center: TerminalCenter, command: String? = nil, tmuxSessionName: String) {
         self.host = host
@@ -120,6 +126,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         terminalView.terminalDelegate = self
         terminalView.optionAsMetaKey = true
         apply(theme: center.theme, fontSize: center.fontSize)
+        scroll.attach(terminalView)
     }
 
     #if DEBUG
@@ -128,6 +135,21 @@ final class TerminalSession: ObservableObject, Identifiable {
         previewOnly = true
         shellKind = .tmux
         phase = .reconnecting(attempt: 2, delay: 4)
+    }
+
+    /// Screenshot / UI-test hook: fill the terminal with a flood of output, no socket.
+    func parkOutputPreview(lines: Int, alternate: Bool) {
+        previewOnly = true
+        shellKind = .plain
+        phase = .connected
+        scroll.attach(terminalView)
+        if alternate {
+            terminalView.feed(text: TerminalFlood.enterAlternateScreen())
+            terminalView.feed(text: "Grok TUI\r\n" + TerminalFlood.lines(min(max(lines, 1), 48), prefix: "tui"))
+        } else {
+            terminalView.feed(text: TerminalFlood.lines(max(lines, 1)))
+        }
+        scroll.previewReady(lines: max(lines, 1), alternate: alternate)
     }
     #endif
 
@@ -462,6 +484,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     private func received(_ bytes: [UInt8], token: Int) {
         guard token == generation else { return }
         terminalView.feed(byteArray: bytes[...])
+        scroll.noteOutput(bytes[...])
     }
 
     private func shellExited(_ exit: ShellExit, token: Int) {

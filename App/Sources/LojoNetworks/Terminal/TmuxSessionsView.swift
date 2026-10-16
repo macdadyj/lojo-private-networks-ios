@@ -65,6 +65,7 @@ struct TmuxSessionsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("tmux.sessions.done")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {

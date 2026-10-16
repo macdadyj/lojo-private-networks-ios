@@ -32,6 +32,7 @@ struct HomeView: View {
                     Image(systemName: "gearshape")
                 }
                 .accessibilityLabel("Settings")
+                .accessibilityIdentifier("home.settings")
             }
         }
         .refreshable { await store.refresh(.user) }

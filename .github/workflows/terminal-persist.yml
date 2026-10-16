@@ -6,6 +6,9 @@ on:
       - "App/Sources/LojoSSH/**"
       - "App/Sources/LojoNetworks/Terminal/**"
       - "tools/terminal-persist/**"
+      - "tools/terminal-scrollback/**"
+      - "App/Sources/LojoTerminalScroll/**"
+      - "App/Tests/LojoNetworksTests/**"
       - ".github/workflows/terminal-persist.yml"
   pull_request:
 
@@ -28,8 +31,11 @@ jobs:
         uses: swift-actions/setup-swift@v2
         with:
           swift-version: "6.0.3"
-      - name: Unit tests
+      - name: Reconnect and tmux tests
         working-directory: tools/terminal-persist
+        run: swift test
+      - name: Scrollback tests
+        working-directory: tools/terminal-scrollback
         run: swift test
 
   ios-simulator:

@@ -6,6 +6,10 @@
 	<string>LOJO Networks</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.2</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LOJO Networks talks to your site gateway on the local network to show your devices, camera stills and controls. Nothing is sent to the public internet.</string>
 	<!--

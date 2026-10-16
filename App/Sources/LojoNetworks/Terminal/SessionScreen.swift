@@ -34,6 +34,7 @@ private struct TabStrip: View {
                     .frame(width: 36, height: 32)
             }
             .accessibilityLabel("Back to hosts")
+            .accessibilityIdentifier("terminal.back")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(center.sessions) { session in
@@ -49,6 +50,7 @@ private struct TabStrip: View {
                     .frame(width: 36, height: 32)
             }
             .accessibilityLabel("New session")
+            .accessibilityIdentifier("terminal.new")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -73,6 +75,7 @@ private struct TabChip: View {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
             }
             .accessibilityLabel("Close \(session.host.label)")
+            .accessibilityIdentifier("terminal.close")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -98,6 +101,7 @@ private struct SessionPane: View {
             }
             .overlay(alignment: .top) { linkBanner }
             .overlay(alignment: .bottom) { tmuxNotice }
+            .overlay { SessionScrollOverlay(session: session, scroll: session.scroll) }
         }
         .overlay(alignment: .top) {
             if let flash {
@@ -261,14 +265,14 @@ private struct SessionBar: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            bar("square.stack", "Sessions on this host", action: onSessions)
-            bar("doc.on.clipboard", "Paste") { session.paste() }
-            bar("doc.on.doc", "Copy selection") {
+            bar("square.stack", "Sessions on this host", id: "terminal.sessions", action: onSessions)
+            bar("doc.on.clipboard", "Paste", id: "terminal.paste") { session.paste() }
+            bar("doc.on.doc", "Copy selection", id: "terminal.copy") {
                 show(session.copySelection() ? "Copied" : "Long-press to select text first")
             }
-            bar("textformat.size.smaller", "Smaller text") { center.fontSize = max(TerminalCenter.fontRange.lowerBound, center.fontSize - 1) }
-            bar("textformat.size.larger", "Larger text") { center.fontSize = min(TerminalCenter.fontRange.upperBound, center.fontSize + 1) }
-            bar("keyboard", "Show or hide keyboard") { session.toggleKeyboard() }
+            bar("textformat.size.smaller", "Smaller text", id: "terminal.smaller") { center.fontSize = max(TerminalCenter.fontRange.lowerBound, center.fontSize - 1) }
+            bar("textformat.size.larger", "Larger text", id: "terminal.larger") { center.fontSize = min(TerminalCenter.fontRange.upperBound, center.fontSize + 1) }
+            bar("keyboard", "Show or hide keyboard", id: "terminal.keyboard") { session.toggleKeyboard() }
         }
         .padding(.leading, 14)
         .padding(.trailing, 6)
@@ -276,13 +280,14 @@ private struct SessionBar: View {
         .background(.ultraThinMaterial)
     }
 
-    private func bar(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+    private func bar(_ symbol: String, _ label: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .medium))
                 .frame(width: 36, height: 32)
         }
         .accessibilityLabel(label)
+        .accessibilityIdentifier(id)
     }
 
     private func show(_ text: String) {
@@ -498,15 +503,45 @@ struct FingerprintText: View {
     }
 }
 
+private struct SessionScrollOverlay: View {
+    @ObservedObject var session: TerminalSession
+    @ObservedObject var scroll: TerminalScrollController
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Text(scroll.state.accessibilityValue)
+                .font(.caption2)
+                .foregroundStyle(.clear)
+                .frame(width: 1, height: 1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .accessibilityIdentifier("terminal.scroll.state")
+                .accessibilityValue(scroll.state.accessibilityValue)
+                .accessibilityHidden(false)
+                .allowsHitTesting(false)
+            if scroll.showJump {
+                JumpToLatestButton(linesFromBottom: scroll.state.linesFromBottom) {
+                    scroll.jumpToLatest()
+                }
+                .padding(.bottom, session.tmuxNotice == nil || session.tmuxNoticeDismissed ? 16 : 56)
+            }
+        }
+    }
+}
+
 /// Hosts the session's long-lived SwiftTerm view; the same view moves between containers on tab switches.
 private struct TerminalBridge: UIViewRepresentable {
     let session: TerminalSession
 
     func makeUIView(context: Context) -> Container {
-        Container()
+        let container = Container()
+        container.accessibilityIdentifier = "terminal.surface"
+        container.isAccessibilityElement = true
+        container.accessibilityLabel = "Terminal"
+        return container
     }
 
     func updateUIView(_ container: Container, context: Context) {
+        session.attachScroll()
         if container.host(session.hostView), session.isLive {
             DispatchQueue.main.async { session.focus() }
         }

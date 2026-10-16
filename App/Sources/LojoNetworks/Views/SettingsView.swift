@@ -1,3 +1,4 @@
+import LojoTerminalScroll
 import SwiftUI
 
 struct SettingsView: View {
@@ -15,6 +16,7 @@ struct SettingsView: View {
                     Toggle(isOn: $store.isDemo) {
                         Label("Demo network", systemImage: "sparkles")
                     }
+                    .accessibilityIdentifier("settings.demo")
                     .onChange(of: store.isDemo) { Haptics.selection() }
                 } footer: {
                     Text(store.isDemo
@@ -42,6 +44,7 @@ struct SettingsView: View {
                         store.resetAddresses()
                         Task { await store.refresh(.user) }
                     }
+                    .accessibilityIdentifier("settings.reset")
                     .disabled(store.isDemo)
                 } header: {
                     Text("Gateway addresses")
@@ -55,6 +58,7 @@ struct SettingsView: View {
                             Text(a.title).tag(a.rawValue)
                         }
                     }
+                    .accessibilityIdentifier("settings.theme")
                 }
 
                 Section {
@@ -65,15 +69,22 @@ struct SettingsView: View {
                             router.showSetup = true
                         }
                     }
+                    .accessibilityIdentifier("settings.setup")
                     .disabled(store.isDemo)
                     Button("Show welcome screens again") {
                         dismiss()
                         onboarded = false
                     }
+                    .accessibilityIdentifier("settings.welcome")
                 }
 
                 Section {
-                    LabeledContent("Version", value: appVersion)
+                    LabeledContent("Version", value: buildNumbers.version)
+                        .accessibilityIdentifier("settings.version")
+                        .accessibilityValue(buildNumbers.version)
+                    LabeledContent("Build", value: buildNumbers.build)
+                        .accessibilityIdentifier("settings.build")
+                        .accessibilityValue(buildNumbers.build)
                 } footer: {
                     Text("LOJO Private Networks · your devices, your network, your control.\nQuestions: team@lojo.engineering")
                 }
@@ -86,6 +97,7 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("settings.done")
                 }
             }
         }
@@ -100,10 +112,11 @@ struct SettingsView: View {
         }
     }
 
-    private var appVersion: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
+    private var buildNumbers: (version: String, build: String) {
+        AppBuildInfo.version(
+            short: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+            build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        )
     }
 }
 
@@ -149,6 +162,7 @@ struct AddressRow: View {
                     }
                 }
                 .buttonStyle(.bordered)
+                .accessibilityIdentifier(path == .lan ? "settings.test.lan" : "settings.test.overlay")
                 .disabled(testing || GatewayAddress.normalize(text) == nil)
             }
             if let problem = GatewayAddress.validationMessage(text) {

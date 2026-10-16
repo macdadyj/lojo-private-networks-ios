@@ -7,7 +7,7 @@ import UIKit
 /// shell or trust a host key, so release builds ignore them.
 struct TerminalLaunch: Sendable {
     enum Screen: String, Sendable {
-        case hosts, keys, key, settings, edit, diag, sessions, reconnecting
+        case hosts, keys, key, settings, edit, diag, sessions, reconnecting, scrollback, alternate
     }
 
     var screen: Screen?
@@ -24,6 +24,8 @@ struct TerminalLaunch: Sendable {
     var ensureKey = false
     /// DEBUG screenshot hook: session list and reconnecting indicator use sample data and do not dial.
     var preview = false
+    /// DEBUG: how many fake output lines to feed for the scrollback preview.
+    var floodLines = 2_500
 
     func autoTrusts(_ fingerprint: String) -> Bool {
         guard let trustFingerprint else { return false }
@@ -52,6 +54,7 @@ struct TerminalLaunch: Sendable {
         launch.gatewayPort = text("LOJO_SSH_GATEWAY_PORT").flatMap(Int.init)
         launch.ensureKey = flag("LOJO_SSH_ENSURE_KEY")
         launch.preview = flag("LOJO_SSH_PREVIEW")
+        launch.floodLines = text("LOJO_SSH_FLOOD").flatMap(Int.init) ?? 2_500
         #endif
         return launch
     }()
@@ -193,6 +196,17 @@ final class TerminalCenter: ObservableObject {
             host: host, center: self, tmuxSessionName: TmuxCommand.sessionName(forLabel: host.label)
         )
         session.parkReconnectingPreview()
+        sessions.append(session)
+        selectedID = session.id
+        showingSession = true
+    }
+
+    func openScrollbackPreview(lines: Int, alternate: Bool) {
+        let host = SSHHost(label: "Demo host", address: "100.64.0.2", port: 22, username: "owner", group: "Demo")
+        let session = TerminalSession(
+            host: host, center: self, tmuxSessionName: TmuxCommand.sessionName(forLabel: host.label)
+        )
+        session.parkOutputPreview(lines: lines, alternate: alternate)
         sessions.append(session)
         selectedID = session.id
         showingSession = true
