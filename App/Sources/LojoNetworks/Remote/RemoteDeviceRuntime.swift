@@ -94,7 +94,7 @@ final class RemoteDeviceRuntime: ObservableObject {
         case .none:
             break
         }
-        if !ack.isEmpty, let client = client() {
+        if !ack.isEmpty {
             _ = try? await client.heartbeat(HeartbeatBody(
                 batteryPercent: batteryPercent(),
                 charging: charging,

@@ -36,6 +36,7 @@ enum RemotePreferences {
         return created
     }
 
+    @MainActor
     static func phoneName(launch: LaunchOptions) -> String {
         if let name = launch.remoteName, !name.isEmpty { return name }
         if let saved = UserDefaults.standard.string(forKey: nameKey), !saved.isEmpty { return saved }

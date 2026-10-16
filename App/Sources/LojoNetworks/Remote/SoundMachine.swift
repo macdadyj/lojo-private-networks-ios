@@ -94,7 +94,17 @@ final class SoundMachine {
             forProperty: MPMediaPlaylistPropertyName,
             comparisonType: .equalTo
         ))
-        guard let playlist = query.collections?.first, let items = playlist.items, !items.isEmpty else {
+        guard let playlist = query.collections?.first else {
+            message = "No Apple Music playlist named \(trimmed) is on this iPhone."
+            return
+        }
+        // Xcode 26's SDK returns a non-optional list. Xcode 16.4 still returns an optional.
+        #if swift(>=6.2)
+        let songs = playlist.items
+        #else
+        let songs = playlist.items ?? []
+        #endif
+        guard !songs.isEmpty else {
             message = "No Apple Music playlist named \(trimmed) is on this iPhone."
             return
         }
