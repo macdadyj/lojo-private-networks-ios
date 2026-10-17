@@ -16,8 +16,8 @@ final class RemoteControllerUITests: XCTestCase {
             "LOJO_REMOTE_DEMO": "1",
         ]
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["Remote"].waitForExistence(timeout: 8))
-        app.tabBars.buttons["Remote"].tap()
+        XCTAssertTrue(app.tabBars.buttons["Network"].waitForExistence(timeout: 8))
+        tap("remote.open")
         XCTAssertTrue(app.staticTexts["Spare iPhone"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["Online"].exists)
         XCTAssertTrue(app.staticTexts["iPhone Remote Controller"].exists)
@@ -122,8 +122,15 @@ final class RemotePairUITests: XCTestCase {
 
         app.buttons["remote.schedule"].tap()
         saveShot("controller-schedule")
-        app.buttons["remote.schedule.add-overnight"].tap()
-        app.buttons["remote.schedule.save"].tap()
+        let addOvernight = app.descendants(matching: .any).matching(identifier: "remote.schedule.add-overnight").firstMatch
+        if !addOvernight.waitForExistence(timeout: 2) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(addOvernight.waitForExistence(timeout: 6))
+        addOvernight.tap()
+        let save = app.descendants(matching: .any).matching(identifier: "remote.schedule.save").firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 6))
+        save.tap()
         wait(app, playback: "White Noise", timeout: 20)
     }
 

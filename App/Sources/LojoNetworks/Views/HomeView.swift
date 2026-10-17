@@ -11,6 +11,16 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 ConnectionHealthCard()
+                Button {
+                    router.showRemote = true
+                } label: {
+                    Label("iPhone Remote Controller", systemImage: "iphone.gen3")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .card()
+                .accessibilityIdentifier("remote.open")
                 if store.isStale {
                     StaleBanner()
                 }

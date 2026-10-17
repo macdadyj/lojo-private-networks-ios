@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: Hashable {
-    case network, activity, map, check, terminal, remote
+    case network, activity, map, check, terminal
 }
 
 @MainActor
@@ -11,6 +11,7 @@ final class Router: ObservableObject {
     @Published var mapPath: [String] = []
     @Published var showSettings = false
     @Published var showSetup = false
+    @Published var showRemote = false
     @Published var pendingConfirmPin: String?
 }
 
@@ -81,6 +82,9 @@ struct RootView: View {
             await store.pair(offer)
         }
         .environmentObject(router)
+        .fullScreenCover(isPresented: $router.showRemote) {
+            RemoteRootView()
+        }
         .sheet(isPresented: $router.showSettings) {
             SettingsView()
         }
@@ -160,10 +164,6 @@ struct RootView: View {
                 .environmentObject(terminal.keys)
                 .tabItem { Label("Terminal", systemImage: "apple.terminal") }
                 .tag(AppTab.terminal)
-
-            RemoteRootView()
-                .tabItem { Label("Remote", systemImage: "iphone.gen3") }
-                .tag(AppTab.remote)
         }
     }
 
@@ -195,7 +195,9 @@ struct RootView: View {
         case .map: router.tab = .map
         case .check: router.tab = .check
         case .terminal: router.tab = .terminal
-        case .remote: router.tab = .remote
+        case .remote:
+            router.tab = .network
+            router.showRemote = true
         case .device: break
         case .settings:
             router.tab = .network

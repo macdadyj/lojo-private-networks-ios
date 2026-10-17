@@ -10,6 +10,7 @@ enum RemoteRoute: Hashable {
 struct RemoteRootView: View {
     @EnvironmentObject private var store: NetworkStore
     @EnvironmentObject private var remote: RemoteControllerStore
+    @Environment(\.dismiss) private var dismiss
     @State private var path: [RemoteRoute] = []
 
     var body: some View {
@@ -78,6 +79,10 @@ struct RemoteRootView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("remote.done")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await remote.refresh() }
