@@ -178,24 +178,29 @@ final class LojoNetworksUITests: XCTestCase {
     /// Scroll the front sheet until `label` is in the accessibility tree.
     /// The row label in a form is often not the hit target. Tap the button, or the label's point.
     private func tapLabel(_ label: String) {
+        reveal(label)
         let button = app.buttons[label]
         if button.exists, button.isHittable {
             button.tap()
             return
         }
         let text = app.staticTexts[label]
-        guard text.exists else { return }
-        text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        guard text.exists, text.isHittable else { return }
+        text.tap()
     }
 
     private func reveal(_ label: String) {
         let text = app.staticTexts[label]
         let button = app.buttons[label]
-        func visible() -> Bool { text.exists || button.exists }
-        if text.waitForExistence(timeout: 1) || button.exists { return }
+        func ready() -> Bool {
+            (button.exists && button.isHittable) || (text.exists && text.isHittable)
+        }
+        if text.waitForExistence(timeout: 1) || button.exists {
+            if ready() { return }
+        }
         for _ in 0..<8 {
             app.swipeUp()
-            if visible() { return }
+            if ready() { return }
         }
     }
 

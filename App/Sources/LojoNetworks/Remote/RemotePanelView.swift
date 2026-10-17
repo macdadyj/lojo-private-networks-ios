@@ -272,44 +272,47 @@ struct ScheduleEditorView: View {
     @State private var loaded = false
 
     var body: some View {
-        Form {
-            Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
                 Button("Add bedtime white noise and morning off") {
                     schedules.append(SampleAutomations.bedtimeSchedule)
                 }
+                .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("remote.schedule.add-overnight")
-            } footer: {
                 Text("Bedtime white noise starts at 8:00 PM and Morning off stops it at 6:00 AM. The spare iPhone runs this itself. The same names are also Shortcuts.")
-            }
-            ForEach($schedules) { $schedule in
-                Section(schedule.soundTitle) {
-                    Toggle("Enabled", isOn: $schedule.enabled)
-                    Picker("Sound", selection: $schedule.soundID) {
-                        ForEach(BundledSound.allCases) { sound in
-                            Text(sound.title).tag(sound.rawValue)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                ForEach($schedules) { $schedule in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(schedule.soundTitle).font(.headline)
+                        Toggle("Enabled", isOn: $schedule.enabled)
+                        Picker("Sound", selection: $schedule.soundID) {
+                            ForEach(BundledSound.allCases) { sound in
+                                Text(sound.title).tag(sound.rawValue)
+                            }
+                        }
+                        DatePicker("Starts", selection: binding(minutes: $schedule.startMinutes), displayedComponents: .hourAndMinute)
+                        DatePicker("Stops", selection: binding(minutes: $schedule.stopMinutes), displayedComponents: .hourAndMinute)
+                        Button("Remove", role: .destructive) {
+                            schedules.removeAll { $0.id == schedule.id }
                         }
                     }
-                    DatePicker("Starts", selection: binding(minutes: $schedule.startMinutes), displayedComponents: .hourAndMinute)
-                    DatePicker("Stops", selection: binding(minutes: $schedule.stopMinutes), displayedComponents: .hourAndMinute)
-                    Button("Remove", role: .destructive) {
-                        schedules.removeAll { $0.id == schedule.id }
-                    }
+                    .card()
                 }
-            }
-        }
-        .navigationTitle("Schedules")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
                     Task {
                         await remote.save(schedules: schedules, phoneID: phoneID)
                         dismiss()
                     }
                 }
+                .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("remote.schedule.save")
             }
+            .padding(16)
         }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("Schedules")
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard !loaded else { return }
             loaded = true
