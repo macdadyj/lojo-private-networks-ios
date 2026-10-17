@@ -69,23 +69,7 @@ if [[ -z "${APP_PATH}" ]]; then
   echo "LojoNetworks.app was not produced" >&2
   exit 1
 fi
-# The simulator cannot install a broadcast appex ("extensionDictionary must be set"),
-# so the app target removes it from simulator bundles after printing its plist.
-# The built product must still exist, and the device archive still embeds it.
-BUILT_PLIST="$(find "${DERIVED}/Build/Products" -path '*/LojoBroadcast.appex/Info.plist' ! -path '*/LojoNetworks.app/*' | head -1)"
-if [[ -z "${BUILT_PLIST}" ]]; then
-  echo "The ReplayKit broadcast extension was not built" >&2
-  exit 1
-fi
-plutil -p "${BUILT_PLIST}"
-if ! plutil -p "${BUILT_PLIST}" | grep -q 'com.apple.broadcast-services-upload'; then
-  echo "The broadcast extension Info.plist has no ReplayKit extension point" >&2
-  exit 1
-fi
-if [[ -d "${APP_PATH}/PlugIns/LojoBroadcast.appex" ]]; then
-  echo "The simulator app still contains the broadcast appex and will not install" >&2
-  exit 1
-fi
+bash scripts/strip-simulator-broadcast.sh "${APP_PATH}" "${DERIVED}"
 
 xcrun simctl boot "${DEVICE_UDID}" || true
 xcrun simctl bootstatus "${DEVICE_UDID}" -b

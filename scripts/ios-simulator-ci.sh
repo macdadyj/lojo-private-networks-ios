@@ -43,6 +43,7 @@ if [[ -z "$APP_PATH" ]]; then
   echo "LojoNetworks.app was not produced" >&2
   exit 1
 fi
+bash "$REPO/scripts/strip-simulator-broadcast.sh" "$APP_PATH" "$DERIVED"
 
 xcrun simctl boot "$UDID" || true
 xcrun simctl bootstatus "$UDID" -b
