@@ -32,6 +32,8 @@ and no Simulator; "run" means the physical phone.
 | `App/Sources/LojoSSH` | SSH core on apple/swift-nio-ssh: connection, auth, PTY shell, exec, keep-alive ping, known_hosts, overlay-only policy, key import. No UIKit, so `tools/ssh-smoke` builds it on Linux too |
 | `App/Sources/LojoNetworks/Terminal` | Terminal tab: saved hosts, gateway device list, Secure Enclave / Keychain keys, host-key checks, session tabs on SwiftTerm (pinned v1.11.2, fetched by `sync-app.sh`). Each tab attaches a named tmux session so the shell survives a dropped SSH connection. Scrollback is 10,240 lines with pin-to-bottom and a Jump to latest chip |
 | `App/Sources/LojoTerminalScroll` | Foundation-only scrollback policy (buffer size, pin/unpin, TUI wheel translation). Linux-tested from `tools/terminal-scrollback` |
+| `App/Sources/LojoRemote` | iPhone Remote Controller protocol: sounds, schedules, Shortcuts names, relay client. Linux-tested from `tools/remote-controller` |
+| `relay/` | Relay the spare iPhone and the controller share. `node relay/server.js` on the site gateway (loopback unless `BIND` is set). No secrets |
 | `.github/workflows/ios.yml` | macOS unit tests, phone UI tests (every tap + flood scroll), TestFlight upload on `main` |
 | `gateway/lojo-ssh-directory` | Read-only gateway script the Terminal tab runs over SSH to list LOJO devices and whether SSH is open |
 | `tools/ssh-smoke` | Linux smoke test for `LojoSSH` against a real OpenSSH (`scripts/test-sshd.sh smoke`) |

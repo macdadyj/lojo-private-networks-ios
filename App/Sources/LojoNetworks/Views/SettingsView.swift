@@ -7,6 +7,10 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("lojo.onboarded") private var onboarded = true
     @AppStorage("lojo.appearance") private var appearanceRaw = Appearance.system.rawValue
+    @AppStorage(RemotePreferences.roleKey) private var role = "controller"
+    @AppStorage(RemotePreferences.urlKey) private var relayURL = ""
+    @AppStorage(RemotePreferences.codeKey) private var networkCode = ""
+    @AppStorage(RemotePreferences.nameKey) private var remoteName = ""
     @State private var pastedOffer: PairingOffer?
 
     var body: some View {
@@ -50,6 +54,28 @@ struct SettingsView: View {
                     Text("Gateway addresses")
                 } footer: {
                     Text("Enter an IP address or host name. https:// addresses default to port 8443 and need pairing; plain addresses use legacy HTTP on port 8801. The app tries both paths at once and uses site Wi‑Fi when it answers, otherwise the private overlay. Overlay addresses only work while your LOJO VPN profile is connected.")
+                }
+
+                Section {
+                    TextField("Relay address", text: $relayURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("remote.settings.url")
+                    TextField("Network code", text: $networkCode)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("remote.settings.code")
+                    TextField("Name for this iPhone", text: $remoteName)
+                        .accessibilityIdentifier("remote.settings.name")
+                    Toggle("This iPhone is the sound machine", isOn: Binding(
+                        get: { role == "device" },
+                        set: { role = $0 ? "device" : "controller" }
+                    ))
+                    .accessibilityIdentifier("remote.settings.mode")
+                } header: {
+                    Text("iPhone Remote Controller")
+                } footer: {
+                    Text("Run the LOJO Networks relay on your site gateway, then enter its address, for example 100.96.1.18:8791. The network code is the shared passphrase for your phones. It is not stored in the app's source.")
                 }
 
                 Section("Appearance") {

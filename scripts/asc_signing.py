@@ -27,6 +27,9 @@ CERTIFICATE_TYPE = "IOS_DISTRIBUTION"
 TARGETS = (
     ("com.lojo.PrivateNetworks", "LOJO Networks App Store"),
 )
+BUNDLE_NAMES = {
+    "com.lojo.PrivateNetworks": "LOJO Networks",
+}
 SIGNING_KEYS = (
     "CODE_SIGN_STYLE",
     "CODE_SIGN_IDENTITY",
@@ -204,7 +207,7 @@ def parse_data(status, body, context):
     return parsed
 
 
-def find_bundle_id(token, identifier):
+def lookup_bundle_id(token, identifier):
     query = urllib.parse.urlencode(
         {"filter[identifier]": identifier, "limit": "5"}
     )
@@ -213,11 +216,35 @@ def find_bundle_id(token, identifier):
     for item in parsed["data"]:
         if item.get("attributes", {}).get("identifier") == identifier:
             return item["id"]
-    sys.stderr.write(
-        f"No App Store Connect bundle ID for {identifier}. "
-        "Create that App ID first. Nothing was revoked.\n"
+    return None
+
+
+def ensure_bundle_id(token, identifier, name):
+    found = lookup_bundle_id(token, identifier)
+    if found:
+        return found
+    status, body = api(
+        token,
+        "POST",
+        "/v1/bundleIds",
+        {
+            "data": {
+                "type": "bundleIds",
+                "attributes": {
+                    "identifier": identifier,
+                    "name": name,
+                    "platform": "IOS",
+                },
+            }
+        },
     )
-    raise SystemExit(1)
+    if status == 409:
+        found = lookup_bundle_id(token, identifier)
+        if found:
+            return found
+    parsed = parse_data(status, body, "bundle ID create")
+    print(f"Registered App ID {identifier}.", flush=True)
+    return parsed["data"]["id"]
 
 
 def delete_named_profiles(token, name):
@@ -412,7 +439,7 @@ def prepare(argv):
     try:
         for bundle_id, profile_name in TARGETS:
             print(f"Installing an App Store profile for {bundle_id}.", flush=True)
-            resource_id = find_bundle_id(token, bundle_id)
+            resource_id = ensure_bundle_id(token, bundle_id, BUNDLE_NAMES[bundle_id])
             delete_named_profiles(token, profile_name)
             profile_id, raw = create_profile(token, profile_name, resource_id, certificate_id)
             path = install_profile(raw, profile_id, profiles_dir)

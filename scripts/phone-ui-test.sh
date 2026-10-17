@@ -39,3 +39,5 @@ if [[ "${status}" -ne 0 ]]; then
   rm -rf build/phone-ui-screenshots/LojoNetworksUI.xcresult
   run_phone
 fi
+mkdir -p build/phone-ui-screenshots
+cp -f /tmp/lojo-remote-ui/*.png build/phone-ui-screenshots/ 2>/dev/null || true

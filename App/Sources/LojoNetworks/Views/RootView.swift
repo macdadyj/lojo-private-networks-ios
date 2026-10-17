@@ -11,14 +11,17 @@ final class Router: ObservableObject {
     @Published var mapPath: [String] = []
     @Published var showSettings = false
     @Published var showSetup = false
+    @Published var showRemote = false
     @Published var pendingConfirmPin: String?
 }
 
 struct RootView: View {
     @EnvironmentObject private var store: NetworkStore
+    @EnvironmentObject private var device: RemoteDeviceRuntime
     @StateObject private var router = Router()
     @StateObject private var terminal = TerminalCenter()
     @AppStorage("lojo.onboarded") private var onboarded = false
+    @AppStorage(RemotePreferences.roleKey) private var storedRemoteRole = "controller"
     @AppStorage("lojo.appearance") private var appearanceRaw = Appearance.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
     @State private var watcher = PathWatcher()
@@ -28,10 +31,24 @@ struct RootView: View {
         store.launch.appearance ?? Appearance(rawValue: appearanceRaw) ?? .system
     }
 
+    private var remoteRole: String {
+        store.launch.remoteRole ?? storedRemoteRole
+    }
+
+    private var showMain: Bool {
+        if store.launch.remoteRole == "device" { return true }
+        if let screen = store.launch.screen, screen != .onboarding { return true }
+        return onboarded
+    }
+
     var body: some View {
         Group {
-            if onboarded {
-                tabs
+            if showMain {
+                if remoteRole == "device" {
+                    DeviceModeView()
+                } else {
+                    tabs
+                }
             } else {
                 OnboardingView { demo in
                     store.isDemo = demo
@@ -65,6 +82,15 @@ struct RootView: View {
             await store.pair(offer)
         }
         .environmentObject(router)
+        .fullScreenCover(isPresented: $router.showRemote) {
+            RemoteRootView()
+        }
+        .sheet(isPresented: $router.showSettings) {
+            SettingsView()
+        }
+        .sheet(isPresented: $router.showSetup) {
+            SetupView()
+        }
         .onAppear(perform: applyLaunchOptions)
         .task(id: scenePhase) {
             guard scenePhase == .active, onboarded else { return }
@@ -76,6 +102,7 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            RemoteIntentBridge.shared.sceneIsActive = phase == .active
             switch phase {
             case .background:
                 terminal.noteScene(inBackground: true)
@@ -86,6 +113,10 @@ struct RootView: View {
             @unknown default:
                 break
             }
+        }
+        .task(id: remoteRole) {
+            guard remoteRole == "device" else { return }
+            await device.run()
         }
         .onAppear {
             let s = store
@@ -134,12 +165,6 @@ struct RootView: View {
                 .tabItem { Label("Terminal", systemImage: "apple.terminal") }
                 .tag(AppTab.terminal)
         }
-        .sheet(isPresented: $router.showSettings) {
-            SettingsView()
-        }
-        .sheet(isPresented: $router.showSetup) {
-            SetupView()
-        }
     }
 
     /// lojo://pair links arrive here when the owner scans the gateway's QR code with the Camera app.
@@ -170,6 +195,10 @@ struct RootView: View {
         case .map: router.tab = .map
         case .check: router.tab = .check
         case .terminal: router.tab = .terminal
+        case .remote:
+            router.tab = .network
+            router.showRemote = true
+        case .device: break
         case .settings:
             router.tab = .network
             router.showSettings = true

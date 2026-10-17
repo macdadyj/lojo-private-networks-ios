@@ -12,6 +12,12 @@
 	<string>1</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>LOJO Networks plays songs from your Apple Music library when this iPhone is an iPhone Remote Controller sound machine.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LOJO Networks talks to your site gateway on the local network to show your devices, camera stills and controls. Nothing is sent to the public internet.</string>
 	<!--
@@ -25,6 +31,10 @@
 	-->
 	<key>LOJOLegacyHTTPOverVPN</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>shortcuts</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

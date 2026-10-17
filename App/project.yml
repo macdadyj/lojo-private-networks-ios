@@ -79,6 +79,7 @@ targets:
       - target: LojoSSH
       - target: LojoTrust
       - target: LojoTerminalScroll
+      - target: LojoRemote
       - package: swift-nio
         product: NIOConcurrencyHelpers
       - package: swift-nio
@@ -114,13 +115,20 @@ targets:
     platform: iOS
     sources:
       - path: Sources/LojoTerminalScroll
+  LojoRemote:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: Sources/LojoRemote
   LojoNetworksTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests/LojoNetworksTests
+      - path: Tests/LojoRemoteTests
     dependencies:
       - target: LojoTerminalScroll
+      - target: LojoRemote
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.tests
