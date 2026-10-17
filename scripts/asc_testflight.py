@@ -73,31 +73,70 @@ def find_app(token):
     raise SystemExit(1)
 
 
+def build_fields():
+    return "version,processingState,usesNonExemptEncryption,uploadedDate,expired"
+
+
+def pick_build(data, version):
+    matches = [
+        item for item in data.get("data", [])
+        if str((item.get("attributes") or {}).get("version")) == str(version)
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (item.get("attributes") or {}).get("uploadedDate") or "")
+    build = matches[-1]
+    detail_id = (
+        ((build.get("relationships") or {}).get("buildBetaDetail") or {}).get("data") or {}
+    ).get("id")
+    detail = {}
+    for item in data.get("included", []):
+        if item.get("type") != "buildBetaDetails":
+            continue
+        if detail_id and item.get("id") != detail_id:
+            continue
+        detail = item.get("attributes") or {}
+        break
+    return build, detail
+
+
 def find_build(token, app_id, version):
-    query = urllib.parse.urlencode(
+    filtered = urllib.parse.urlencode(
         {
             "filter[app]": app_id,
             "filter[version]": version,
             "include": "buildBetaDetail",
             "limit": "10",
-            "fields[builds]": "version,processingState,usesNonExemptEncryption,uploadedDate,expired",
+            "fields[builds]": build_fields(),
         }
     )
-    status, body = signing.api(token, "GET", "/v1/builds?" + query)
-    data = parsed(status, body, "build lookup")
-    matches = [
-        item for item in data.get("data", [])
-        if str(item.get("attributes", {}).get("version")) == str(version)
-    ]
-    if not matches:
-        return None
-    matches.sort(key=lambda item: item.get("attributes", {}).get("uploadedDate") or "")
-    build = matches[-1]
-    detail = {}
-    for item in data.get("included", []):
-        if item.get("type") == "buildBetaDetails":
-            detail = item.get("attributes") or {}
-    return build, detail
+    status, body = signing.api(token, "GET", "/v1/builds?" + filtered)
+    found = pick_build(parsed(status, body, "build lookup"), version)
+    if found is not None:
+        return found
+    # A version filter can miss a build that is still processing. The recent
+    # list is the same app, so a match here is the uploaded build.
+    recent = urllib.parse.urlencode(
+        {
+            "filter[app]": app_id,
+            "include": "buildBetaDetail",
+            "limit": "200",
+            "fields[builds]": build_fields(),
+        }
+    )
+    status, body = signing.api(token, "GET", "/v1/builds?" + recent)
+    data = parsed(status, body, "recent builds")
+    versions = []
+    for item in data.get("data", []):
+        attributes = item.get("attributes") or {}
+        versions.append(
+            f"{attributes.get('version')}:{attributes.get('processingState')}"
+        )
+    signature = ",".join(versions) if versions else "none"
+    if signature != getattr(find_build, "last_versions", None):
+        find_build.last_versions = signature
+        show("recent build versions: " + signature)
+    return pick_build(data, version)
 
 
 def refresh_detail(token, build_id):
@@ -346,6 +385,11 @@ def release(version, wait_seconds, require_ready):
                     show(line)
         processing = attributes.get("processingState")
         internal = detail.get("internalBuildState")
+        if processing in ("FAILED", "INVALID"):
+            show("final processingState=" + value_text(processing))
+            show("final internalBuildState=" + value_text(internal))
+            sys.stderr.write(f"Build {version} was rejected by App Store Connect ({processing}).\n")
+            raise SystemExit(1)
         if processing == "VALID" and internal in READY_INTERNAL:
             show("final processingState=" + value_text(processing))
             show("final internalBuildState=" + value_text(internal))

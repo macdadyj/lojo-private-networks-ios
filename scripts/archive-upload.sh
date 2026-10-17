@@ -161,6 +161,14 @@ export KEY_PATH
 umask 077
 write_api_key
 
+# 32 and 34 finished uploading, then this step stopped before App Store
+# Connect listed them. Assign whichever has appeared before uploading again.
+for prior in 32 34; do
+  echo "Checking whether build ${prior} can join the internal group."
+  KEY_PATH="${KEY_PATH}" python3 "${SCRIPT_DIR}/asc_testflight.py" release \
+    --build "${prior}" --wait-seconds 90 || true
+done
+
 cd "${ROOT}"
 if [[ ! -d "${APP}/LojoNetworks.xcodeproj" ]]; then
   bash "${SCRIPT_DIR}/ios-prepare.sh"
@@ -242,5 +250,5 @@ xcodebuild -exportArchive \
 echo "Uploaded to App Store Connect."
 echo "Releasing build ${BUILD_NUMBER} to the internal TestFlight group."
 KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
-  python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 900
+  python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 2700
 echo "TestFlight build ${BUILD_NUMBER}"
