@@ -111,7 +111,22 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "1.2"
         ENABLE_PREVIEWS: NO
+        ENABLE_DEBUG_DYLIB: NO
         OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -I$(SRCROOT)/../build/SourcePackages/checkouts/swift-atomics/Sources/_AtomicsShims/include -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOAtomics.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIODarwin.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOLinux.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOOpenBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOFreeBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOPosix.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOWASI.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../build/SourcePackages/checkouts/swift-nio/Sources/CNIOWindows/include/module.modulemap"
+    postBuildScripts:
+      - name: Omit the broadcast appex from simulator installs
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ "${PLATFORM_NAME}" != "iphonesimulator" ]; then
+            exit 0
+          fi
+          APPEX="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/PlugIns/LojoBroadcast.appex"
+          if [ -f "${APPEX}/Info.plist" ]; then
+            echo "Broadcast extension Info.plist:"
+            plutil -p "${APPEX}/Info.plist"
+          fi
+          rm -rf "${APPEX}"
+          echo "Left the ReplayKit extension out of the simulator app. The device archive still embeds it."
   LojoTerminalScroll:
     type: library.static
     platform: iOS
