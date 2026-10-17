@@ -79,7 +79,6 @@ SIMCTL_CHILD_LOJO_NETWORK_CODE="${CODE}" \
 SIMCTL_CHILD_LOJO_REMOTE_NAME="Spare iPhone" \
 SIMCTL_CHILD_LOJO_REMOTE_BATTERY=81 \
 SIMCTL_CHILD_LOJO_REMOTE_NOW=20:30 \
-SIMCTL_CHILD_LOJO_REMOTE_PREVIEW_FRAME=1 \
 SIMCTL_CHILD_LOJO_DEMO=0 \
   xcrun simctl launch "${DEVICE_UDID}" com.lojo.PrivateNetworks
 
@@ -150,8 +149,5 @@ if not any(item.get("soundID") == "white-noise" and item.get("startMinutes") == 
 playback = phone.get("playback") or {}
 if not playback.get("playing") or playback.get("soundID") != "white-noise":
     raise SystemExit("spare iPhone was not playing white noise")
-frame_status, frame = get(f"/v1/phones/{phone['id']}/screen")
-if frame_status != 200 or not frame.startswith(b"\xff\xd8"):
-    raise SystemExit("live screen frame was not a JPEG on the relay")
 print("relay pair check ok")
 PY

@@ -198,10 +198,16 @@ final class LojoNetworksUITests: XCTestCase {
     private func reveal(_ label: String) {
         let text = app.staticTexts[label]
         let button = app.buttons[label]
+        func found() -> Bool { text.exists || button.exists }
         if text.waitForExistence(timeout: 1) || button.exists { return }
-        for _ in 0..<8 {
+        for _ in 0..<6 {
             app.swipeUp()
-            if text.exists || button.exists { return }
+            if found() { return }
+        }
+        // The row may already be above the fold after a later section was opened.
+        for _ in 0..<12 {
+            app.swipeDown()
+            if found() { return }
         }
     }
 
