@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import urllib.parse
 from pathlib import Path
 
