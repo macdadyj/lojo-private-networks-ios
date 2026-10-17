@@ -50,10 +50,6 @@ final class RemoteControllerUITests: XCTestCase {
         saveShot("controller-schedule")
         tap("remote.schedule.add-overnight")
         tap("remote.schedule.save")
-        tap("remote.screen")
-        XCTAssertTrue(app.staticTexts["Live screen"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "remote.screen.image").firstMatch.exists)
-        saveShot("controller-screen")
     }
 
     private func saveShot(_ name: String) {
@@ -129,11 +125,6 @@ final class RemotePairUITests: XCTestCase {
         app.buttons["remote.schedule.add-overnight"].tap()
         app.buttons["remote.schedule.save"].tap()
         wait(app, playback: "White Noise", timeout: 20)
-
-        app.buttons["remote.screen"].tap()
-        let image = app.descendants(matching: .any).matching(identifier: "remote.screen.image").firstMatch
-        XCTAssertTrue(image.waitForExistence(timeout: 20), "live screen frame did not arrive from the relay")
-        saveShot("controller-screen")
     }
 
     private func saveShot(_ name: String) {

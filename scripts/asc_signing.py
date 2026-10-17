@@ -26,11 +26,9 @@ PROFILE_TYPE = "IOS_APP_STORE"
 CERTIFICATE_TYPE = "IOS_DISTRIBUTION"
 TARGETS = (
     ("com.lojo.PrivateNetworks", "LOJO Networks App Store"),
-    ("com.lojo.PrivateNetworks.broadcast", "LOJO Networks Broadcast App Store"),
 )
 BUNDLE_NAMES = {
     "com.lojo.PrivateNetworks": "LOJO Networks",
-    "com.lojo.PrivateNetworks.broadcast": "LOJO Networks Broadcast",
 }
 SIGNING_KEYS = (
     "CODE_SIGN_STYLE",
@@ -662,9 +660,7 @@ def export_roundtrip():
         profiles = payload["provisioningProfiles"]
         if profiles.get("com.lojo.PrivateNetworks") != "LOJO Networks App Store":
             raise SystemExit("export options missed the iOS profile")
-        if profiles.get("com.lojo.PrivateNetworks.broadcast") != "LOJO Networks Broadcast App Store":
-            raise SystemExit("export options missed the broadcast profile")
-        if len(profiles) != 2:
+        if len(profiles) != 1:
             raise SystemExit("export options included unexpected profiles")
 
 

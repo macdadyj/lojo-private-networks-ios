@@ -34,7 +34,6 @@ and no Simulator; "run" means the physical phone.
 | `App/Sources/LojoTerminalScroll` | Foundation-only scrollback policy (buffer size, pin/unpin, TUI wheel translation). Linux-tested from `tools/terminal-scrollback` |
 | `App/Sources/LojoRemote` | iPhone Remote Controller protocol: sounds, schedules, Shortcuts names, relay client. Linux-tested from `tools/remote-controller` |
 | `relay/` | Relay the spare iPhone and the controller share. `node relay/server.js` on the site gateway (loopback unless `BIND` is set). No secrets |
-| `App/Sources/BroadcastUpload` | ReplayKit broadcast upload extension. View-only live screen, started on the spare iPhone |
 | `.github/workflows/ios.yml` | macOS unit tests, phone UI tests (every tap + flood scroll), TestFlight upload on `main` |
 | `gateway/lojo-ssh-directory` | Read-only gateway script the Terminal tab runs over SSH to list LOJO devices and whether SSH is open |
 | `tools/ssh-smoke` | Linux smoke test for `LojoSSH` against a real OpenSSH (`scripts/test-sshd.sh smoke`) |

@@ -49,7 +49,6 @@ enum RemotePreferences {
 final class RemoteControllerStore: ObservableObject {
     @Published private(set) var phones: [RemotePhone] = []
     @Published var message: String?
-    @Published var frame: Data?
     @Published var selectedSoundID = BundledSound.whiteNoise.rawValue
     let demo: Bool
     private let launch: LaunchOptions
@@ -146,15 +145,6 @@ final class RemoteControllerStore: ObservableObject {
         } catch {
             message = "The schedule was not saved."
         }
-    }
-
-    func loadFrame(phoneID: String) async {
-        if demo {
-            frame = PreviewFrame.jpeg(title: "Spare iPhone")
-            return
-        }
-        guard let client = client() else { return }
-        frame = try? await client.latestFrame(phoneID: phoneID)
     }
 
     private func send(_ body: CommandBody, phoneID: String, optimistic: (inout RemotePhone) -> Void) async {

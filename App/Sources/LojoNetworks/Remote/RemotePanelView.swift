@@ -236,13 +236,6 @@ struct RemotePanelView: View {
             .accessibilityIdentifier("remote.schedule")
             Divider()
             Button {
-                path.append(.screen(phoneID))
-            } label: {
-                linkRow("Live screen", systemImage: "rectangle.on.rectangle")
-            }
-            .accessibilityIdentifier("remote.screen")
-            Divider()
-            Button {
                 path.append(.help)
             } label: {
                 linkRow("Help", systemImage: "questionmark.circle")
@@ -340,49 +333,6 @@ struct ScheduleEditorView: View {
 
     private static func minutes(from date: Date) -> Int {
         ScheduleClock.minutes(from: date)
-    }
-}
-
-struct ScreenViewerView: View {
-    let phoneID: String
-    @EnvironmentObject private var remote: RemoteControllerStore
-
-    var body: some View {
-        VStack(spacing: 16) {
-            if let data = remote.frame, let image = UIImage(data: data) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .accessibilityIdentifier("remote.screen.image")
-                    .accessibilityLabel("Live screen")
-                Text("Live screen")
-                    .font(.headline)
-                    .accessibilityIdentifier("remote.screen.ready")
-            } else {
-                ContentUnavailableView(
-                    "Waiting for the spare iPhone",
-                    systemImage: "rectangle.dashed",
-                    description: Text("On that iPhone, start the live screen broadcast. You can watch. You cannot tap, move icons, or read iMessages.")
-                )
-            }
-            Text(RemoteHelpCopy.limitsShort)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(uiColor: .systemGroupedBackground))
-        .navigationTitle("Live screen")
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            while !Task.isCancelled {
-                await remote.loadFrame(phoneID: phoneID)
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
     }
 }
 

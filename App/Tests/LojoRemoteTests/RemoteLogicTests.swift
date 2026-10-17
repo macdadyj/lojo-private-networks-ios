@@ -8,7 +8,6 @@ final class RemoteLogicTests: XCTestCase {
         XCTAssertTrue(text.contains("iMessages"))
         XCTAssertTrue(text.contains("Home Screen icons"))
         XCTAssertTrue(text.contains("inject taps"))
-        XCTAssertTrue(text.contains("view-only"))
         XCTAssertTrue(text.contains("Bedtime white noise"))
         XCTAssertTrue(text.contains("Morning off"))
         XCTAssertTrue(text.contains("force-quit"))

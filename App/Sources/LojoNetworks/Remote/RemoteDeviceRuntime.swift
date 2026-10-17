@@ -9,15 +9,12 @@ final class RemoteDeviceRuntime: ObservableObject {
     @Published private(set) var batteryLabel = "Battery unknown"
     @Published private(set) var schedules: [SoundSchedule] = []
     @Published private(set) var shortcuts: [NamedShortcut] = SampleAutomations.shortcuts
-    @Published private(set) var broadcastReady = false
     let phoneName: String
     private let launch: LaunchOptions
     private var machine: SoundMachine { RemoteIntentBridge.shared.machine }
-    private let inbox = FrameInbox()
     private var hold = ScheduleHold()
     private var revision = 0
     private var registered = false
-    private var lastPreview = Date.distantPast
     private let phoneID: String
 
     init(launch: LaunchOptions) {
@@ -26,19 +23,12 @@ final class RemoteDeviceRuntime: ObservableObject {
         phoneID = RemotePreferences.phoneID(launch: launch)
         schedules = Self.storedSchedules()
         revision = UserDefaults.standard.integer(forKey: Self.revisionKey)
-        broadcastReady = Self.extensionInstalled
     }
 
     func run() async {
         machine.prepareSession()
         machine.requestMusicAccess()
         UIDevice.current.isBatteryMonitoringEnabled = true
-        inbox.setHandler { [weak self] jpeg in
-            Task { @MainActor in
-                await self?.forward(jpeg)
-            }
-        }
-        inbox.start()
         while !Task.isCancelled {
             await tick()
             try? await Task.sleep(for: .seconds(1))
@@ -108,13 +98,6 @@ final class RemoteDeviceRuntime: ObservableObject {
         playback = machine.snapshot(now: now)
         shortcuts = RemoteIntentBridge.shared.shortcuts()
         batteryLabel = batteryText()
-        if launch.remotePreviewFrame, Date().timeIntervalSince(lastPreview) > 1 {
-            lastPreview = Date()
-            let jpeg = PreviewFrame.jpeg(title: phoneName)
-            if !jpeg.isEmpty {
-                ScreenFramePoster().post(jpeg)
-            }
-        }
     }
 
     private func register(_ client: RelayClient) async {
@@ -174,12 +157,6 @@ final class RemoteDeviceRuntime: ObservableObject {
         shortcuts = RemoteIntentBridge.shared.shortcuts()
     }
 
-    private func forward(_ jpeg: Data) async {
-        guard let client = client() else { return }
-        if !registered { await register(client) }
-        try? await client.postFrame(jpeg, phoneID: phoneID)
-    }
-
     private func client() -> RelayClient? {
         guard let url = RemotePreferences.relayURL(launch: launch) else { return nil }
         let code = RemotePreferences.networkCode(launch: launch)
@@ -228,10 +205,5 @@ final class RemoteDeviceRuntime: ObservableObject {
             UserDefaults.standard.set(data, forKey: schedulesKey)
         }
         UserDefaults.standard.set(revision, forKey: revisionKey)
-    }
-
-    static var extensionInstalled: Bool {
-        guard let plugins = Bundle.main.builtInPlugInsURL else { return false }
-        return FileManager.default.fileExists(atPath: plugins.appendingPathComponent("LojoBroadcast.appex").path)
     }
 }

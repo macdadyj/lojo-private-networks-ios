@@ -56,7 +56,7 @@ xcodebuild build-for-testing \
   -destination "platform=iOS Simulator,id=${CONTROLLER_UDID}" \
   -clonedSourcePackagesDirPath build/SourcePackages \
   -derivedDataPath "${DERIVED}" \
-  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="-" \
   DEVELOPMENT_TEAM="" \
@@ -69,8 +69,6 @@ if [[ -z "${APP_PATH}" ]]; then
   echo "LojoNetworks.app was not produced" >&2
   exit 1
 fi
-bash scripts/strip-simulator-broadcast.sh "${APP_PATH}" "${DERIVED}"
-
 xcrun simctl boot "${DEVICE_UDID}" || true
 xcrun simctl bootstatus "${DEVICE_UDID}" -b
 xcrun simctl install "${DEVICE_UDID}" "${APP_PATH}"
@@ -109,7 +107,7 @@ xcodebuild test-without-building \
   -derivedDataPath "${DERIVED}" \
   -resultBundlePath "${SHOTS}/RemotePair.xcresult" \
   -only-testing:LojoNetworksUITests/RemotePairUITests \
-  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="-" \
   DEVELOPMENT_TEAM="" \

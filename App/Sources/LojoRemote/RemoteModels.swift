@@ -2,11 +2,9 @@ import Foundation
 
 public enum RemoteHelpCopy {
     public static let productName = "iPhone Remote Controller"
-    public static let limitsShort = "View-only. Cannot read iMessages, move icons, or inject taps."
+    public static let limitsShort = "Cannot read iMessages, move icons, or inject taps."
     public static let limits = """
     iPhone Remote Controller cannot read your iMessages, move Home Screen icons, or inject taps. iOS does not allow any of those, and this app does not try.
-
-    The live screen is view-only. You start it on the spare iPhone with the broadcast button. Your other phone can watch, not touch.
 
     What does travel across your private network: play and stop, the sound you pick, volume for the built-in sounds, a sleep timer, and schedules such as white noise from 8:00 PM to 6:00 AM. Schedules run on the spare iPhone while iPhone Remote Controller is open there. Locking the screen keeps sound playing, including the stop time. A start time fires while that mode is still running. iOS will not launch it from a force-quit at an exact minute.
 

@@ -29,7 +29,7 @@ xcodebuild \
   -destination "platform=iOS Simulator,id=$UDID" \
   -clonedSourcePackagesDirPath "$REPO/build/SourcePackages" \
   -derivedDataPath "$DERIVED" \
-  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="-" \
   DEVELOPMENT_TEAM="" \
@@ -43,8 +43,6 @@ if [[ -z "$APP_PATH" ]]; then
   echo "LojoNetworks.app was not produced" >&2
   exit 1
 fi
-bash "$REPO/scripts/strip-simulator-broadcast.sh" "$APP_PATH" "$DERIVED"
-
 xcrun simctl boot "$UDID" || true
 xcrun simctl bootstatus "$UDID" -b
 xcrun simctl install "$UDID" "$APP_PATH"
@@ -104,12 +102,6 @@ shot remote-schedule \
   SIMCTL_CHILD_LOJO_SCREEN=remote \
   SIMCTL_CHILD_LOJO_REMOTE_DEMO=1 \
   SIMCTL_CHILD_LOJO_REMOTE_SCREEN=schedule
-
-shot remote-screen \
-  SIMCTL_CHILD_LOJO_DEMO=1 \
-  SIMCTL_CHILD_LOJO_SCREEN=remote \
-  SIMCTL_CHILD_LOJO_REMOTE_DEMO=1 \
-  SIMCTL_CHILD_LOJO_REMOTE_SCREEN=screen
 
 shot remote-device \
   SIMCTL_CHILD_LOJO_SCREEN=device \

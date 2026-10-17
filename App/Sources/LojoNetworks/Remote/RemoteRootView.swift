@@ -4,7 +4,6 @@ import SwiftUI
 enum RemoteRoute: Hashable {
     case panel(String)
     case schedule(String)
-    case screen(String)
     case help
 }
 
@@ -74,8 +73,6 @@ struct RemoteRootView: View {
                     RemotePanelView(phoneID: id, path: $path)
                 case .schedule(let id):
                     ScheduleEditorView(phoneID: id)
-                case .screen(let id):
-                    ScreenViewerView(phoneID: id)
                 case .help:
                     RemoteHelpView()
                 }
@@ -108,7 +105,6 @@ struct RemoteRootView: View {
         switch screen {
         case "panel": path = [.panel(id)]
         case "schedule": path = [.schedule(id)]
-        case "viewer", "screen": path = [.screen(id)]
         case "help": path = [.help]
         default: break
         }

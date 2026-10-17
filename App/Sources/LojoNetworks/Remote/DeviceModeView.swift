@@ -1,5 +1,4 @@
 import LojoRemote
-import ReplayKit
 import SwiftUI
 
 struct DeviceModeView: View {
@@ -26,25 +25,6 @@ struct DeviceModeView: View {
                         Text(playingLine)
                             .font(.title3.weight(.semibold))
                             .accessibilityIdentifier("device.mode.playback")
-                    }
-                    .card()
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Live screen")
-                            .font(.headline)
-                        Text("Start the broadcast here. The other phone can watch this screen. It cannot tap it.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        if device.broadcastReady {
-                            BroadcastPicker()
-                                .frame(height: 56)
-                                .accessibilityIdentifier("device.broadcast")
-                        } else {
-                            Text("This install does not include the broadcast extension. The TestFlight build of LOJO Networks does. Sound, volume, sleep, and schedules still work.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("device.broadcast.missing")
-                        }
                     }
                     .card()
 
@@ -129,13 +109,3 @@ struct DeviceModeView: View {
     }
 }
 
-struct BroadcastPicker: UIViewRepresentable {
-    func makeUIView(context: Context) -> RPSystemBroadcastPickerView {
-        let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 60, height: 60))
-        picker.preferredExtension = "com.lojo.PrivateNetworks.broadcast"
-        picker.showsMicrophoneButton = false
-        return picker
-    }
-
-    func updateUIView(_ uiView: RPSystemBroadcastPickerView, context: Context) {}
-}

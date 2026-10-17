@@ -80,8 +80,6 @@ targets:
       - target: LojoTrust
       - target: LojoTerminalScroll
       - target: LojoRemote
-      - target: LojoBroadcast
-        embed: true
       - package: swift-nio
         product: NIOConcurrencyHelpers
       - package: swift-nio
@@ -111,7 +109,6 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "1.2"
         ENABLE_PREVIEWS: NO
-        ENABLE_DEBUG_DYLIB: NO
         OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -I$(SRCROOT)/../build/SourcePackages/checkouts/swift-atomics/Sources/_AtomicsShims/include -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOAtomics.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIODarwin.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOLinux.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOOpenBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOFreeBSD.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOPosix.modulemap -Xcc -fmodule-map-file=$(OBJROOT)/GeneratedModuleMaps-$(PLATFORM_NAME)/CNIOWASI.modulemap -Xcc -fmodule-map-file=$(SRCROOT)/../build/SourcePackages/checkouts/swift-nio/Sources/CNIOWindows/include/module.modulemap"
   LojoTerminalScroll:
     type: library.static
@@ -123,56 +120,12 @@ targets:
     platform: iOS
     sources:
       - path: Sources/LojoRemote
-  LojoBroadcast:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: Sources/BroadcastUpload
-        excludes:
-          - Info.plist
-    info:
-      path: Sources/BroadcastUpload/Info.plist
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.PrivateNetworks.broadcast
-        PRODUCT_NAME: LojoBroadcast
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "1"
-        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        TARGETED_DEVICE_FAMILY: "1"
-        SKIP_INSTALL: YES
-        APPLICATION_EXTENSION_API_ONLY: YES
-        CODE_SIGNING_ALLOWED: NO
-        # YES makes infoPlistUtility drop NSExtension, so the simulator
-        # reports that the extension dictionary is missing.
-        GENERATE_INFOPLIST_FILE: NO
-        # The simulator rejects a broadcast appex built as a debug dylib:
-        # "extensionDictionary must be set".
-        ENABLE_DEBUG_DYLIB: NO
-    postBuildScripts:
-      - name: Write the ReplayKit extension point
-        basedOnDependencyAnalysis: false
-        script: |
-          PLIST="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Info.plist"
-          /usr/libexec/PlistBuddy -c "Delete :NSExtension" "${PLIST}" >/dev/null 2>&1 || true
-          /usr/libexec/PlistBuddy -c "Add :NSExtension dict" "${PLIST}"
-          /usr/libexec/PlistBuddy -c "Add :NSExtension:NSExtensionPointIdentifier string com.apple.broadcast-services-upload" "${PLIST}"
-          /usr/libexec/PlistBuddy -c "Add :NSExtension:NSExtensionPrincipalClass string LojoBroadcast.SampleHandler" "${PLIST}"
-          /usr/libexec/PlistBuddy -c "Add :NSExtension:RPBroadcastProcessMode string RPBroadcastProcessModeSampleBuffer" "${PLIST}"
-          /usr/libexec/PlistBuddy -c "Delete :EXAppExtensionAttributes" "${PLIST}" >/dev/null 2>&1 || true
-          /usr/libexec/PlistBuddy -c "Add :EXAppExtensionAttributes dict" "${PLIST}"
-          /usr/libexec/PlistBuddy -c "Add :EXAppExtensionAttributes:EXExtensionPointIdentifier string com.apple.broadcast-services-upload" "${PLIST}"
-          echo "Broadcast Info.plist after writing the extension point:"
-          plutil -p "${PLIST}"
-    dependencies:
-      - target: LojoRemote
   LojoNetworksTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests/LojoNetworksTests
       - path: Tests/LojoRemoteTests
-      - path: Tests/BroadcastTests
     dependencies:
       - target: LojoTerminalScroll
       - target: LojoRemote

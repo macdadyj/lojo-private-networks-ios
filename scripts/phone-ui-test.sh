@@ -9,30 +9,15 @@ UDID="$(bash scripts/ios-sim-udid.sh)"
 echo "Simulator ${UDID}"
 
 mkdir -p build/phone-ui-screenshots
-xcodebuild build-for-testing \
-  -project App/LojoNetworks.xcodeproj \
-  -scheme LojoNetworksUI \
-  -destination "platform=iOS Simulator,id=${UDID}" \
-  -clonedSourcePackagesDirPath build/SourcePackages \
-  -derivedDataPath build/DerivedDataUI \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="-" \
-  DEVELOPMENT_TEAM="" \
-  ONLY_ACTIVE_ARCH=YES \
-  ARCHS=arm64 \
-  SWIFT_ENABLE_EXPLICIT_MODULES=NO
-APP_PATH="$(find build/DerivedDataUI -type d -name 'LojoNetworks.app' -path '*iphonesimulator*' | head -1)"
-bash scripts/strip-simulator-broadcast.sh "${APP_PATH}" build/DerivedDataUI
 run_phone() {
-  xcodebuild test-without-building \
+  xcodebuild test \
     -project App/LojoNetworks.xcodeproj \
     -scheme LojoNetworksUI \
     -destination "platform=iOS Simulator,id=${UDID}" \
     -clonedSourcePackagesDirPath build/SourcePackages \
     -derivedDataPath build/DerivedDataUI \
     -resultBundlePath build/phone-ui-screenshots/LojoNetworksUI.xcresult \
-    CODE_SIGNING_ALLOWED=YES \
+    CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGN_IDENTITY="-" \
     DEVELOPMENT_TEAM="" \
