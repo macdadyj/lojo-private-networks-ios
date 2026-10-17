@@ -161,14 +161,6 @@ export KEY_PATH
 umask 077
 write_api_key
 
-# 32 and 34 finished uploading, then this step stopped before App Store
-# Connect listed them. Assign whichever has appeared before uploading again.
-for prior in 32 34; do
-  echo "Checking whether build ${prior} can join the internal group."
-  KEY_PATH="${KEY_PATH}" python3 "${SCRIPT_DIR}/asc_testflight.py" release \
-    --build "${prior}" --wait-seconds 90 || true
-done
-
 cd "${ROOT}"
 if [[ ! -d "${APP}/LojoNetworks.xcodeproj" ]]; then
   bash "${SCRIPT_DIR}/ios-prepare.sh"
@@ -238,7 +230,39 @@ xcodebuild archive \
   -derivedDataPath "${ROOT}/build/ArchiveDerivedData" \
   DEVELOPMENT_TEAM="${TEAM}" \
   CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
+  MARKETING_VERSION="1.2" \
   SWIFT_ENABLE_EXPLICIT_MODULES=NO
+
+# App Store Connect only lists 13 and 16. Later uploads never became builds.
+# Stamp the archive so this upload cannot reuse an old CFBundleVersion.
+python3 - "${ROOT}/build/LojoNetworks.xcarchive" "${BUILD_NUMBER}" "1.2" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+build, marketing = sys.argv[2], sys.argv[3]
+app_plist = archive / "Products/Applications/LojoNetworks.app/Info.plist"
+meta_plist = archive / "Info.plist"
+if not app_plist.is_file():
+    sys.exit("The archive has no app Info.plist to stamp.")
+app = plistlib.loads(app_plist.read_bytes())
+print(f"Archive CFBundleVersion before stamp: {app.get('CFBundleVersion')}")
+app["CFBundleVersion"] = build
+app["CFBundleShortVersionString"] = marketing
+app_plist.write_bytes(plistlib.dumps(app))
+if meta_plist.is_file():
+    meta = plistlib.loads(meta_plist.read_bytes())
+    props = meta.get("ApplicationProperties") or {}
+    props["CFBundleVersion"] = build
+    props["CFBundleShortVersionString"] = marketing
+    meta["ApplicationProperties"] = props
+    meta_plist.write_bytes(plistlib.dumps(meta))
+checked = plistlib.loads(app_plist.read_bytes()).get("CFBundleVersion")
+if checked != build:
+    sys.exit(f"The archive build number stayed {checked}.")
+print(f"Stamped CFBundleVersion {build}")
+PY
 
 xcodebuild -exportArchive \
   -archivePath "${ROOT}/build/LojoNetworks.xcarchive" \
