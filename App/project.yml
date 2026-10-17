@@ -149,6 +149,21 @@ targets:
         # The simulator rejects a broadcast appex built as a debug dylib:
         # "extensionDictionary must be set".
         ENABLE_DEBUG_DYLIB: NO
+    postBuildScripts:
+      - name: Write the ReplayKit extension point
+        basedOnDependencyAnalysis: false
+        script: |
+          PLIST="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :NSExtension" "${PLIST}" >/dev/null 2>&1 || true
+          /usr/libexec/PlistBuddy -c "Add :NSExtension dict" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :NSExtension:NSExtensionPointIdentifier string com.apple.broadcast-services-upload" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :NSExtension:NSExtensionPrincipalClass string LojoBroadcast.SampleHandler" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :NSExtension:RPBroadcastProcessMode string RPBroadcastProcessModeSampleBuffer" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Delete :EXAppExtensionAttributes" "${PLIST}" >/dev/null 2>&1 || true
+          /usr/libexec/PlistBuddy -c "Add :EXAppExtensionAttributes dict" "${PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :EXAppExtensionAttributes:EXExtensionPointIdentifier string com.apple.broadcast-services-upload" "${PLIST}"
+          echo "Broadcast Info.plist after writing the extension point:"
+          plutil -p "${PLIST}"
     dependencies:
       - target: LojoRemote
   LojoNetworksTests:
