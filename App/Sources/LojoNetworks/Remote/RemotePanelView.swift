@@ -1,10 +1,17 @@
 import LojoRemote
 import SwiftUI
 
+private enum PanelPage: Hashable, Identifiable {
+    case schedule
+    case help
+
+    var id: Self { self }
+}
+
 struct RemotePanelView: View {
     let phoneID: String
-    @Binding var path: [RemoteRoute]
     @EnvironmentObject private var remote: RemoteControllerStore
+    @State private var panelPage: PanelPage?
 
     private var phone: RemotePhone? { remote.phones.first { $0.id == phoneID } }
 
@@ -37,6 +44,19 @@ struct RemotePanelView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(phone?.name ?? RemoteHelpCopy.productName)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $panelPage) { page in
+            panelDestination(page)
+        }
+    }
+
+    @ViewBuilder
+    private func panelDestination(_ page: PanelPage) -> some View {
+        switch page {
+        case .schedule:
+            ScheduleEditorView(phoneID: phoneID)
+        case .help:
+            RemoteHelpView()
+        }
     }
 
     private func status(_ phone: RemotePhone) -> some View {
@@ -229,20 +249,21 @@ struct RemotePanelView: View {
     private var links: some View {
         VStack(spacing: 0) {
             Button {
-                path.append(.schedule(phoneID))
+                panelPage = .schedule
             } label: {
                 linkRow("Schedules", systemImage: "clock")
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("remote.schedule")
             Divider()
             Button {
-                path.append(.help)
+                panelPage = .help
             } label: {
                 linkRow("Help", systemImage: "questionmark.circle")
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("remote.help.panel")
         }
-        .buttonStyle(.plain)
         .card(padding: 0)
     }
 
@@ -256,6 +277,8 @@ struct RemotePanelView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func playbackLine(_ phone: RemotePhone) -> String {

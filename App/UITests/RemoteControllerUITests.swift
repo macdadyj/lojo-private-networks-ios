@@ -121,11 +121,9 @@ final class RemotePairUITests: XCTestCase {
         wait(app, playback: "Stopped", timeout: 20)
 
         app.buttons["remote.schedule"].tap()
+        XCTAssertTrue(app.navigationBars["Schedules"].waitForExistence(timeout: 6))
         saveShot("controller-schedule")
         let addOvernight = app.descendants(matching: .any).matching(identifier: "remote.schedule.add-overnight").firstMatch
-        if !addOvernight.waitForExistence(timeout: 2) {
-            app.swipeUp()
-        }
         XCTAssertTrue(addOvernight.waitForExistence(timeout: 6))
         addOvernight.tap()
         let save = app.descendants(matching: .any).matching(identifier: "remote.schedule.save").firstMatch

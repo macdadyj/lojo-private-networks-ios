@@ -71,7 +71,7 @@ struct RemoteRootView: View {
             .navigationDestination(for: RemoteRoute.self) { route in
                 switch route {
                 case .panel(let id):
-                    RemotePanelView(phoneID: id, path: $path)
+                    RemotePanelView(phoneID: id)
                 case .schedule(let id):
                     ScheduleEditorView(phoneID: id)
                 case .help:
