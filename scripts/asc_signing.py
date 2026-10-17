@@ -530,6 +530,14 @@ def cleanup():
         return
     manifest = json.loads(manifest_path.read_text())
     profiles_ok = delete_profiles()
+    if os.environ.get("SKIP_CERTIFICATE_REVOKE") == "1":
+        print(
+            "Left this run's distribution certificate in place so processing can finish.",
+            flush=True,
+        )
+        if not profiles_ok:
+            raise SystemExit(1)
+        return
     token = jwt_from_env()
     certificate_ok = revoke_own_certificate(
         token, manifest.get("certificateId"), manifest.get("certificatePath")
