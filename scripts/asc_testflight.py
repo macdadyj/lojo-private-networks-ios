@@ -73,10 +73,6 @@ def find_app(token):
     raise SystemExit(1)
 
 
-def build_fields():
-    return "version,processingState,usesNonExemptEncryption,uploadedDate,expired"
-
-
 def pick_build(data, version):
     matches = [
         item for item in data.get("data", [])
@@ -100,32 +96,21 @@ def pick_build(data, version):
     return build, detail
 
 
+def fetch_builds(token, app_id, version=None):
+    # No sparse fields and no included beta detail. A build that is still
+    # processing has no beta detail, and asking for one hides it.
+    params = {"filter[app]": app_id, "limit": "200"}
+    if version is not None:
+        params["filter[version]"] = str(version)
+    status, body = signing.api(token, "GET", "/v1/builds?" + urllib.parse.urlencode(params))
+    return parsed(status, body, "build lookup")
+
+
 def find_build(token, app_id, version):
-    filtered = urllib.parse.urlencode(
-        {
-            "filter[app]": app_id,
-            "filter[version]": version,
-            "include": "buildBetaDetail",
-            "limit": "10",
-            "fields[builds]": build_fields(),
-        }
-    )
-    status, body = signing.api(token, "GET", "/v1/builds?" + filtered)
-    found = pick_build(parsed(status, body, "build lookup"), version)
+    found = pick_build(fetch_builds(token, app_id, version), version)
     if found is not None:
         return found
-    # A version filter can miss a build that is still processing. The recent
-    # list is the same app, so a match here is the uploaded build.
-    recent = urllib.parse.urlencode(
-        {
-            "filter[app]": app_id,
-            "include": "buildBetaDetail",
-            "limit": "200",
-            "fields[builds]": build_fields(),
-        }
-    )
-    status, body = signing.api(token, "GET", "/v1/builds?" + recent)
-    data = parsed(status, body, "recent builds")
+    data = fetch_builds(token, app_id)
     versions = []
     for item in data.get("data", []):
         attributes = item.get("attributes") or {}
@@ -137,6 +122,39 @@ def find_build(token, app_id, version):
         find_build.last_versions = signature
         show("recent build versions: " + signature)
     return pick_build(data, version)
+
+
+def adopt(wait_seconds):
+    """Release the newest upload that is newer than build 16, if one exists."""
+    token = signing.jwt_from_env()
+    app_id = find_app(token)
+    rows = []
+    for item in fetch_builds(token, app_id).get("data", []):
+        attributes = item.get("attributes") or {}
+        version = str(attributes.get("version"))
+        rows.append((version, attributes.get("processingState"), attributes.get("uploadedDate")))
+    if not rows:
+        show("recent build versions: none")
+    for version, state, uploaded in rows:
+        show(f"build {version} state={state} uploaded={uploaded}")
+    usable = []
+    rejected = []
+    for version, state, _uploaded in rows:
+        if not version.isdigit() or int(version) < 32:
+            continue
+        if state in ("FAILED", "INVALID"):
+            rejected.append((version, state))
+        else:
+            usable.append(int(version))
+    if not usable:
+        if rejected:
+            show("uploaded builds were rejected: " + ",".join(f"{v}:{s}" for v, s in rejected))
+            raise SystemExit(1)
+        show("no uploaded build newer than 16")
+        raise SystemExit(2)
+    newest = str(max(usable))
+    show(f"adopting build {newest}")
+    release(newest, wait_seconds, True)
 
 
 def refresh_detail(token, build_id):
@@ -617,7 +635,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "release":
+    if len(sys.argv) > 1 and sys.argv[1] in ("release", "adopt"):
+        command = sys.argv[1]
         version = os.environ.get("BUILD_NUMBER", "")
         wait_seconds = 900
         require_ready = False
@@ -638,16 +657,22 @@ def main():
             else:
                 raise SystemExit("Unknown release argument.")
             index += 2
-        if not version:
-            raise SystemExit("Missing build number.")
         key_file = prepare_key()
         try:
-            release(version, wait_seconds, require_ready)
+            if command == "adopt":
+                adopt(wait_seconds)
+            else:
+                if not version:
+                    raise SystemExit("Missing build number.")
+                release(version, wait_seconds, require_ready)
         finally:
             if key_file:
                 Path(key_file).unlink(missing_ok=True)
         return
-    raise SystemExit("Usage: asc_testflight.py --self-test | release [--build N] [--wait-seconds N] [--require-ready]")
+    raise SystemExit(
+        "Usage: asc_testflight.py --self-test | adopt [--wait-seconds N] | "
+        "release [--build N] [--wait-seconds N] [--require-ready]"
+    )
 
 
 if __name__ == "__main__":

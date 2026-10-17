@@ -161,6 +161,20 @@ export KEY_PATH
 umask 077
 write_api_key
 
+# Build 38 uploaded with that version and was accepted for processing.
+# The old lookup hid any build that did not yet have a beta detail.
+set +e
+python3 "${SCRIPT_DIR}/asc_testflight.py" adopt --wait-seconds 2400
+adopt=$?
+set -e
+if [[ "${adopt}" -eq 0 ]]; then
+  echo "An already uploaded build is in the internal TestFlight group."
+  exit 0
+fi
+if [[ "${adopt}" -ne 2 ]]; then
+  exit "${adopt}"
+fi
+
 cd "${ROOT}"
 if [[ ! -d "${APP}/LojoNetworks.xcodeproj" ]]; then
   bash "${SCRIPT_DIR}/ios-prepare.sh"
@@ -273,6 +287,15 @@ xcodebuild -exportArchive \
   -authenticationKeyIssuerID "${ASC_ISSUER_ID}"
 echo "Uploaded to App Store Connect."
 echo "Releasing build ${BUILD_NUMBER} to the internal TestFlight group."
+set +e
 KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
   python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 2700
+release_status=$?
+set -e
+if [[ "${release_status}" -ne 0 ]]; then
+  # Revoking the certificate while App Store Connect is still processing
+  # makes the upload fail signature checks.
+  export SKIP_CERTIFICATE_REVOKE=1
+  exit "${release_status}"
+fi
 echo "TestFlight build ${BUILD_NUMBER}"
