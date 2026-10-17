@@ -36,7 +36,7 @@ enum RemoteSoundChoice: String, AppEnum {
 
 struct PlaySoundIntent: AppIntent {
     static var title: LocalizedStringResource { "Play sound" }
-    static var description: IntentDescription { IntentDescription("Plays a sound-machine sound on this iPhone.") }
+    static var description: IntentDescription { IntentDescription("Plays a sound-machine sound.") }
     static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Sound", default: .whiteNoise)
@@ -54,7 +54,7 @@ struct PlaySoundIntent: AppIntent {
 
 struct StopSoundIntent: AppIntent {
     static var title: LocalizedStringResource { "Stop" }
-    static var description: IntentDescription { IntentDescription("Stops sound on this iPhone.") }
+    static var description: IntentDescription { IntentDescription("Stops the sound.") }
     static var openAppWhenRun: Bool { false }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -65,7 +65,7 @@ struct StopSoundIntent: AppIntent {
 
 struct SetVolumeIntent: AppIntent {
     static var title: LocalizedStringResource { "Set volume" }
-    static var description: IntentDescription { IntentDescription("Sets the volume of the built-in sounds on this iPhone.") }
+    static var description: IntentDescription { IntentDescription("Sets the volume of the built-in sounds.") }
     static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Percent", default: 60)
@@ -80,7 +80,7 @@ struct SetVolumeIntent: AppIntent {
 
 struct PlayPlaylistIntent: AppIntent {
     static var title: LocalizedStringResource { "Play Music playlist" }
-    static var description: IntentDescription { IntentDescription("Plays an Apple Music playlist that is on this iPhone.") }
+    static var description: IntentDescription { IntentDescription("Plays a playlist from the Music library.") }
     static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Playlist")
@@ -99,7 +99,7 @@ struct PlayPlaylistIntent: AppIntent {
 
 struct SleepTimerIntent: AppIntent {
     static var title: LocalizedStringResource { "Sleep timer" }
-    static var description: IntentDescription { IntentDescription("Stops sound on this iPhone after a number of minutes.") }
+    static var description: IntentDescription { IntentDescription("Stops the sound after a number of minutes.") }
     static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Minutes", default: 30)
@@ -115,7 +115,7 @@ struct SleepTimerIntent: AppIntent {
 
 struct ReportStatusIntent: AppIntent {
     static var title: LocalizedStringResource { "Report status" }
-    static var description: IntentDescription { IntentDescription("Says what this iPhone is playing.") }
+    static var description: IntentDescription { IntentDescription("Says what is currently playing.") }
     static var openAppWhenRun: Bool { false }
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {

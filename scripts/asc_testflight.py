@@ -138,19 +138,15 @@ def adopt(wait_seconds):
     for version, state, uploaded in rows:
         show(f"build {version} state={state} uploaded={uploaded}")
     usable = []
-    rejected = []
     for version, state, _uploaded in rows:
         if not version.isdigit() or int(version) < 32:
             continue
+        # A failed upload is finished. It must not block the next build number.
         if state in ("FAILED", "INVALID"):
-            rejected.append((version, state))
-        else:
-            usable.append(int(version))
+            continue
+        usable.append(int(version))
     if not usable:
-        if rejected:
-            show("uploaded builds were rejected: " + ",".join(f"{v}:{s}" for v, s in rejected))
-            raise SystemExit(1)
-        show("no uploaded build newer than 16")
+        show("no in-progress upload newer than 16")
         raise SystemExit(2)
     newest = str(max(usable))
     show(f"adopting build {newest}")

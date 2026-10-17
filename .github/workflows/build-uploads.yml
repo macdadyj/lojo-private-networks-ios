@@ -1,0 +1,20 @@
+name: Build upload errors
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  uploads:
+    name: App Store Connect buildUploads
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print build upload errors
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: python3 scripts/asc_build_uploads.py
