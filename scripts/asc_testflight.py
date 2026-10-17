@@ -339,8 +339,10 @@ def release(version, wait_seconds, require_ready):
     app_id = find_app(token)
     found = None
     # A finished upload can take several minutes to show up in the builds API.
+    # The token lasts 19 minutes, so each lookup signs a new one.
     deadline = time.time() + wait_seconds
     while found is None and time.time() < deadline:
+        token = signing.jwt_from_env()
         found = find_build(token, app_id, version)
         if found is None:
             time.sleep(15)
