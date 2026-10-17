@@ -143,7 +143,9 @@ targets:
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
         CODE_SIGNING_ALLOWED: NO
-        GENERATE_INFOPLIST_FILE: YES
+        # YES makes infoPlistUtility drop NSExtension, so the simulator
+        # reports that the extension dictionary is missing.
+        GENERATE_INFOPLIST_FILE: NO
         # The simulator rejects a broadcast appex built as a debug dylib:
         # "extensionDictionary must be set".
         ENABLE_DEBUG_DYLIB: NO
