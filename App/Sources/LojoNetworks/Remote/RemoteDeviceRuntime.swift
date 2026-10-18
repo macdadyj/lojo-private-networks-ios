@@ -5,6 +5,8 @@ import UIKit
 @MainActor
 final class RemoteDeviceRuntime: ObservableObject {
     @Published private(set) var relayStatus = "Connecting…"
+    /// The gateway URL that worked, or each URL that failed and the error from that attempt.
+    @Published private(set) var relayDetail = ""
     @Published private(set) var playback: PlaybackSnapshot = .idle
     @Published private(set) var batteryLabel = "Battery unknown"
     @Published private(set) var schedules: [SoundSchedule] = []
@@ -45,6 +47,7 @@ final class RemoteDeviceRuntime: ObservableObject {
         }
         guard !siteAccess.clients().isEmpty else {
             relayStatus = siteAccess.missingMessage()
+            relayDetail = ""
             playback = machine.snapshot(now: now)
             return
         }
@@ -73,9 +76,9 @@ final class RemoteDeviceRuntime: ObservableObject {
                 apply(command, now: now)
                 ack.append(command.id)
             }
-            relayStatus = "Online"
+            noteSuccess()
         } catch {
-            relayStatus = "Offline · can't reach the site gateway"
+            noteFailure(error)
         }
         let decision = ScheduleEngine.step(schedules: schedules, at: now, calendar: .current, hold: hold)
         hold = decision.1
@@ -119,10 +122,20 @@ final class RemoteDeviceRuntime: ObservableObject {
             ))
             }
             registered = true
-            relayStatus = "Online"
+            noteSuccess()
         } catch {
-            relayStatus = "Offline · can't reach the site gateway"
+            noteFailure(error)
         }
+    }
+
+    private func noteSuccess() {
+        relayStatus = "Online"
+        relayDetail = siteAccess.lastURL?.absoluteString ?? ""
+    }
+
+    private func noteFailure(_ error: Error) {
+        relayStatus = "Offline · can't reach the site gateway"
+        relayDetail = siteAccess.lastFailure ?? RemoteDiagnostics.text(error)
     }
 
     private func apply(_ command: RemoteCommand, now: Date) {

@@ -18,6 +18,14 @@ struct DeviceModeView: View {
                         Text(device.relayStatus)
                             .font(.headline)
                             .accessibilityIdentifier("device.mode.status")
+                        if !device.relayDetail.isEmpty {
+                            Text(device.relayDetail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier("device.mode.detail")
+                        }
                         Text(device.batteryLabel)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
