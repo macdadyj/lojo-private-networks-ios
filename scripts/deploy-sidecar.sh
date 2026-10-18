@@ -13,6 +13,7 @@ if [[ -f "$DEST/server.js" ]] && ! cmp -s "$DEST/server.js" "$REPO/sidecar/serve
   cp "$DEST/server.js" "$DEST/server.js.bak.$(date +%Y%m%d%H%M%S)"
 fi
 cp "$REPO/sidecar/server.js" "$REPO/sidecar/package.json" "$DEST/"
+cp "$REPO/relay/rooms.js" "$DEST/remote-phones.js"
 if [[ ! -d "$DEST/node_modules/express" ]]; then
   (cd "$DEST" && PATH="$(dirname "$NODE"):$PATH" npm ci --omit=dev)
 fi

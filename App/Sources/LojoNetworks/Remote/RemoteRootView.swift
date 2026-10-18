@@ -30,7 +30,7 @@ struct RemoteRootView: View {
                         EmptyStateCard(
                             systemImage: "iphone.gen3",
                             title: "No spare iPhones yet",
-                            message: "On the spare iPhone, open LOJO Networks and turn on iPhone Remote Controller. Leave that screen open. It shows up here with its battery once the relay can see it.",
+                            message: "On the spare iPhone, open LOJO Networks, pair it to this same site, and turn on iPhone Remote Controller. Leave that screen open.",
                             primary: nil,
                             secondary: nil
                         )

@@ -51,10 +51,10 @@ final class RemoteControllerStore: ObservableObject {
     @Published var message: String?
     @Published var selectedSoundID = BundledSound.whiteNoise.rawValue
     let demo: Bool
-    private let launch: LaunchOptions
+    private let siteAccess: RemoteSiteAccess
 
-    init(launch: LaunchOptions) {
-        self.launch = launch
+    init(launch: LaunchOptions, site: NetworkStore) {
+        siteAccess = RemoteSiteAccess(launch: launch, site: site)
         demo = launch.remoteDemo
         if demo {
             phones = [RemotePhone.demoSpare]
@@ -63,15 +63,16 @@ final class RemoteControllerStore: ObservableObject {
 
     func refresh() async {
         if demo { return }
-        guard let client = client() else {
-            message = "Add the relay address and network code in Settings. The relay runs on your site gateway."
+        guard !siteAccess.clients().isEmpty else {
+            message = siteAccess.missingMessage()
+            phones = []
             return
         }
         do {
-            phones = try await client.list()
+            phones = try await siteAccess.first { try await $0.list() }
             message = nil
         } catch {
-            message = "Can't reach the relay."
+            message = "Can't reach the site gateway."
         }
     }
 
@@ -134,9 +135,9 @@ final class RemoteControllerStore: ObservableObject {
             update(phoneID) { $0.schedules = schedules }
             return
         }
-        guard let client = client() else { return }
+        guard !siteAccess.clients().isEmpty else { return }
         do {
-            let saved = try await client.saveSchedules(schedules, phoneID: phoneID)
+            let saved = try await siteAccess.first { try await $0.saveSchedules(schedules, phoneID: phoneID) }
             update(phoneID) {
                 $0.schedules = saved.schedules
                 $0.scheduleRevision = saved.scheduleRevision
@@ -150,9 +151,9 @@ final class RemoteControllerStore: ObservableObject {
     private func send(_ body: CommandBody, phoneID: String, optimistic: (inout RemotePhone) -> Void) async {
         update(phoneID, optimistic)
         if demo { return }
-        guard let client = client() else { return }
+        guard !siteAccess.clients().isEmpty else { return }
         do {
-            _ = try await client.command(body, phoneID: phoneID)
+            _ = try await siteAccess.first { try await $0.command(body, phoneID: phoneID) }
             message = nil
         } catch {
             message = "The spare iPhone did not accept that."
@@ -164,13 +165,6 @@ final class RemoteControllerStore: ObservableObject {
         var phone = phones[index]
         change(&phone)
         phones[index] = phone
-    }
-
-    private func client() -> RelayClient? {
-        guard let url = RemotePreferences.relayURL(launch: launch) else { return nil }
-        let code = RemotePreferences.networkCode(launch: launch)
-        guard !code.isEmpty else { return nil }
-        return RelayClient(baseURL: url, networkCode: code, transport: AdaptiveRelayTransport())
     }
 
     private func soundTitle(_ id: String) -> String {
