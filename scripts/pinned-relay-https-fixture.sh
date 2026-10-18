@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
-DEST="${ROOT}/App/Tests/LojoNetworksTests/PinnedHTTPSFixture"
+DEST="${ROOT}/App/Tests/PinnedRelayHTTPS/PinnedHTTPSFixture"
 mkdir -p "${DEST}" "${WORK}/demoCA"
 : > "${WORK}/demoCA/index.txt"
 printf '01\n' > "${WORK}/demoCA/serial"

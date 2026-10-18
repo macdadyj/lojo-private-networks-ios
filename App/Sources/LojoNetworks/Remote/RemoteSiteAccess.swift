@@ -41,7 +41,7 @@ final class RemoteSiteAccess {
         return "Pair this phone with your site gateway. The other phone has to be paired to the same site."
     }
 
-    func first<T>(_ work: (RelayClient) async throws -> T) async throws -> T {
+    func first<T: Sendable>(_ work: (RelayClient) async throws -> T) async throws -> T {
         let list = clients()
         guard !list.isEmpty else {
             lastURL = nil

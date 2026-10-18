@@ -125,10 +125,8 @@ targets:
     platform: iOS
     sources:
       - path: Tests/LojoNetworksTests
-        excludes:
-          - "PinnedHTTPSFixture"
-          - "PinnedHTTPSFixture/**"
       - path: Tests/LojoRemoteTests
+      - path: Tests/PinnedRelayHTTPS
       - path: Sources/LojoNetworks/Model/Models.swift
       - path: Sources/LojoNetworks/Services/GatewayAddress.swift
       - path: Sources/LojoNetworks/Services/GatewayClient.swift
@@ -136,7 +134,7 @@ targets:
       - path: Sources/LojoNetworks/Services/PinnedRelayTransport.swift
       - path: Sources/LojoNetworks/Services/PlainHTTP.swift
       - path: Sources/LojoNetworks/Services/SiteTrust.swift
-      - path: Tests/LojoNetworksTests/PinnedHTTPSFixture
+      - path: Tests/PinnedRelayHTTPS/PinnedHTTPSFixture
         optional: true
         buildPhase: resources
     dependencies:
