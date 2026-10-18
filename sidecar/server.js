@@ -20,7 +20,19 @@ const OVERLAY_PREFIXES = (process.env.OVERLAY_PREFIXES || "100.").split(",");
 const MAX_EVENTS = 300;
 const TLS_PORT = Number(process.env.TLS_PORT || 8443);
 const TLS_DIR = process.env.TLS_DIR || path.join(STATE_DIR, "tls");
-const VERSION = "1.4.1";
+const VERSION = "1.5.0";
+function loadRemotePhones() {
+  const candidates = [
+    path.join(__dirname, "remote-phones.js"),
+    path.join(__dirname, "..", "relay", "rooms.js"),
+  ];
+  for (const file of candidates) {
+    if (fs.existsSync(file)) return require(file);
+  }
+  throw new Error("remote controller module is missing (relay/rooms.js)");
+}
+const { createRelay, readRaw } = loadRemotePhones();
+const remotePhones = createRelay({ onlineMs: Number(process.env.ONLINE_MS || 12000) });
 const RELIST_MS = 60 * 1000;
 const HEADER_GPIO_PINS = new Set([3, 5, 7, 8, 10, 11, 12, 13, 15, 16, 18, 19, 21, 22, 23, 24, 26, 27, 28, 29, 31, 32, 33, 35, 36, 37, 38, 40]);
 const startedAt = new Date().toISOString();
@@ -464,13 +476,53 @@ function eventDeviceKey(id) {
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "32kb" }));
+app.use((req, res, next) => {
+  const pathname = (req.originalUrl || req.url || "").split("?")[0];
+  if (pathname.startsWith("/v1/phones")) return next();
+  return express.json({ limit: "32kb" })(req, res, next);
+});
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Lojo-Network");
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
+});
+
+// iPhone Remote Controller. Paired phones send the site CA fingerprint as
+// X-Lojo-Network. Without a certificate, LOJO_REMOTE_CODE is the test room.
+function remoteNetworkCode() {
+  if (tls && tls.caSha256) return String(tls.caSha256).toLowerCase();
+  const override = String(process.env.LOJO_REMOTE_CODE || "").trim().toLowerCase();
+  return override || "";
+}
+
+app.use((req, res, next) => {
+  const pathname = (req.originalUrl || req.url || "").split("?")[0];
+  if (!pathname.startsWith("/v1/phones")) return next();
+  const code = remoteNetworkCode();
+  if (!code) {
+    res.status(503).json({ ok: false, error: "remote controller waits for the site certificate" });
+    return;
+  }
+  const got = String(req.headers["x-lojo-network"] || "").trim().toLowerCase();
+  if (got !== code) {
+    res.status(401).json({ ok: false, error: "network code does not match this site" });
+    return;
+  }
+  readRaw(req)
+    .then((body) => remotePhones.dispatch(req.method, pathname, { "x-lojo-network": code }, body))
+    .then((result) => {
+      res.status(result.status);
+      res.setHeader("Content-Type", result.type || "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(result.body);
+    })
+    .catch((error) => {
+      if (res.headersSent) return;
+      const status = error && error.status ? error.status : 400;
+      res.status(status).json({ ok: false, error: status === 413 ? "body too large" : "bad request" });
+    });
 });
 
 app.get("/health", (_req, res) => {

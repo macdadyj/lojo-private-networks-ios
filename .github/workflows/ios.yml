@@ -29,6 +29,8 @@ jobs:
         run: swift test
       - name: Remote relay
         run: node relay/server.js --self-test
+      - name: Gateway remote controller
+        run: bash scripts/gateway-remote-test.sh
       - name: iPhone Remote Controller tests
         working-directory: tools/remote-controller
         run: swift test

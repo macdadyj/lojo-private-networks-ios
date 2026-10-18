@@ -11,14 +11,16 @@ final class RemoteDeviceRuntime: ObservableObject {
     @Published private(set) var shortcuts: [NamedShortcut] = SampleAutomations.shortcuts
     let phoneName: String
     private let launch: LaunchOptions
+    private let siteAccess: RemoteSiteAccess
     private var machine: SoundMachine { RemoteIntentBridge.shared.machine }
     private var hold = ScheduleHold()
     private var revision = 0
     private var registered = false
     private let phoneID: String
 
-    init(launch: LaunchOptions) {
+    init(launch: LaunchOptions, site: NetworkStore) {
         self.launch = launch
+        siteAccess = RemoteSiteAccess(launch: launch, site: site)
         phoneName = RemotePreferences.phoneName(launch: launch)
         phoneID = RemotePreferences.phoneID(launch: launch)
         schedules = Self.storedSchedules()
@@ -41,17 +43,18 @@ final class RemoteDeviceRuntime: ObservableObject {
             hold.activeScheduleID = nil
             hold.suppressedScheduleID = active
         }
-        guard let client = client() else {
-            relayStatus = "Add the relay address and network code in Settings."
+        guard !siteAccess.clients().isEmpty else {
+            relayStatus = siteAccess.missingMessage()
             playback = machine.snapshot(now: now)
             return
         }
         if !registered {
-            await register(client)
+            await register()
         }
         var ack: [String] = []
         do {
-            let response = try await client.heartbeat(HeartbeatBody(
+            let response = try await siteAccess.first { client in
+                try await client.heartbeat(HeartbeatBody(
                 batteryPercent: batteryPercent(),
                 charging: charging,
                 playback: machine.snapshot(now: now),
@@ -60,6 +63,7 @@ final class RemoteDeviceRuntime: ObservableObject {
                 lastError: machine.snapshot(now: now).message,
                 ack: []
             ), phoneID: phoneID)
+            }
             if response.scheduleRevision != revision {
                 schedules = response.schedules
                 revision = response.scheduleRevision
@@ -71,7 +75,7 @@ final class RemoteDeviceRuntime: ObservableObject {
             }
             relayStatus = "Online"
         } catch {
-            relayStatus = "Offline · can't reach the relay"
+            relayStatus = "Offline · can't reach the site gateway"
         }
         let decision = ScheduleEngine.step(schedules: schedules, at: now, calendar: .current, hold: hold)
         hold = decision.1
@@ -85,7 +89,8 @@ final class RemoteDeviceRuntime: ObservableObject {
             break
         }
         if !ack.isEmpty {
-            _ = try? await client.heartbeat(HeartbeatBody(
+            _ = try? await siteAccess.first { client in
+                try await client.heartbeat(HeartbeatBody(
                 batteryPercent: batteryPercent(),
                 charging: charging,
                 playback: machine.snapshot(now: now),
@@ -94,15 +99,17 @@ final class RemoteDeviceRuntime: ObservableObject {
                 lastError: machine.snapshot(now: now).message,
                 ack: ack
             ), phoneID: phoneID)
+            }
         }
         playback = machine.snapshot(now: now)
         shortcuts = RemoteIntentBridge.shared.shortcuts()
         batteryLabel = batteryText()
     }
 
-    private func register(_ client: RelayClient) async {
+    private func register() async {
         do {
-            _ = try await client.register(RegisterBody(
+            _ = try await siteAccess.first { client in
+                try await client.register(RegisterBody(
                 id: phoneID,
                 name: phoneName,
                 batteryPercent: batteryPercent(),
@@ -110,10 +117,11 @@ final class RemoteDeviceRuntime: ObservableObject {
                 schedules: schedules,
                 shortcuts: RemoteIntentBridge.shared.shortcuts()
             ))
+            }
             registered = true
             relayStatus = "Online"
         } catch {
-            relayStatus = "Offline · can't reach the relay"
+            relayStatus = "Offline · can't reach the site gateway"
         }
     }
 
@@ -155,13 +163,6 @@ final class RemoteDeviceRuntime: ObservableObject {
     func addShortcut(named name: String) {
         RemoteIntentBridge.shared.addName(name)
         shortcuts = RemoteIntentBridge.shared.shortcuts()
-    }
-
-    private func client() -> RelayClient? {
-        guard let url = RemotePreferences.relayURL(launch: launch) else { return nil }
-        let code = RemotePreferences.networkCode(launch: launch)
-        guard !code.isEmpty else { return nil }
-        return RelayClient(baseURL: url, networkCode: code, transport: AdaptiveRelayTransport())
     }
 
     private func currentDate() -> Date {

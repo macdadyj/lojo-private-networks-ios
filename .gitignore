@@ -4,6 +4,7 @@
 *.pfx
 pairing-qr.png
 /build
+node_modules/
 *.p8
 private_keys/
 __pycache__/

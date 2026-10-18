@@ -2,9 +2,17 @@ import SwiftUI
 
 @main
 struct LojoNetworksApp: App {
-    @StateObject private var store = NetworkStore()
-    @StateObject private var remote = RemoteControllerStore(launch: LaunchOptions.current)
-    @StateObject private var device = RemoteDeviceRuntime(launch: LaunchOptions.current)
+    @StateObject private var store: NetworkStore
+    @StateObject private var remote: RemoteControllerStore
+    @StateObject private var device: RemoteDeviceRuntime
+
+    init() {
+        let store = NetworkStore()
+        let launch = LaunchOptions.current
+        _store = StateObject(wrappedValue: store)
+        _remote = StateObject(wrappedValue: RemoteControllerStore(launch: launch, site: store))
+        _device = StateObject(wrappedValue: RemoteDeviceRuntime(launch: launch, site: store))
+    }
 
     var body: some Scene {
         WindowGroup {

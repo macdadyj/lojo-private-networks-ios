@@ -1,64 +1,17 @@
 "use strict";
 
-// LOJO Networks relay for iPhone Remote Controller.
-// A spare iPhone registers here, and the controller phone lists it, sends
-// play/stop/volume/sleep commands, edits schedules, and reads the latest
-// view-only screen frame. No secrets are baked in. Callers share a network
-// code in the X-Lojo-Network header. Bind to loopback unless BIND is set.
-// Run on the site gateway: BIND=0.0.0.0 PORT=8791 node relay/server.js
+// Standalone iPhone Remote Controller relay.
+// On a site, the same rooms run inside the gateway (sidecar/server.js) on
+// HTTPS :8443. This process is for tests and a loopback relay.
+// Bind to loopback unless BIND is set. No secrets are baked in.
 
 const fs = require("fs");
 const http = require("http");
+const { createRelay, readRaw } = require("./rooms");
 
 const BIND = process.env.BIND || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8791);
-const ONLINE_MS = Number(process.env.ONLINE_MS || 12000);
-const MAX_BODY = 2 * 1024 * 1024;
-
-const rooms = new Map();
-
-function room(code) {
-  let found = rooms.get(code);
-  if (!found) {
-    found = { phones: new Map() };
-    rooms.set(code, found);
-  }
-  return found;
-}
-
-function publicPhone(phone, now) {
-  return {
-    id: phone.id,
-    name: phone.name,
-    online: now - phone.lastSeenMs < ONLINE_MS,
-    batteryPercent: phone.batteryPercent,
-    charging: !!phone.charging,
-    playback: phone.playback || null,
-    schedules: phone.schedules || [],
-    scheduleRevision: phone.scheduleRevision || 0,
-    music: phone.music || [],
-    shortcuts: phone.shortcuts || [],
-    lastError: phone.lastError || null,
-  };
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > MAX_BODY) {
-        reject(Object.assign(new Error("body too large"), { status: 413 }));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
+const relay = createRelay({ onlineMs: Number(process.env.ONLINE_MS || 12000) });
 
 function send(res, status, body, type) {
   const payload = body == null ? Buffer.alloc(0) : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
@@ -81,175 +34,9 @@ async function handle(req, res) {
     send(res, 200, { ok: true, service: "lojo-remote-relay" });
     return;
   }
-  if (parts[0] !== "v1" || parts[1] !== "phones") {
-    fail(res, 404, "not found");
-    return;
-  }
-  const code = String(req.headers["x-lojo-network"] || "");
-  if (!code) {
-    fail(res, 401, "missing network code");
-    return;
-  }
-  const book = room(code);
-  const now = Date.now();
-
-  if (req.method === "GET" && parts.length === 2) {
-    const phones = [...book.phones.values()].map((phone) => publicPhone(phone, now));
-    phones.sort((a, b) => a.name.localeCompare(b.name));
-    send(res, 200, { phones });
-    return;
-  }
-
-  if (req.method === "POST" && parts.length === 2) {
-    const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
-    const id = String(body.id || "");
-    const name = String(body.name || "").trim();
-    if (!id || !name) {
-      fail(res, 400, "id and name are required");
-      return;
-    }
-    const existing = book.phones.get(id);
-    const phone = existing || {
-      id,
-      commands: [],
-      commandSeq: 0,
-      schedules: [],
-      scheduleRevision: 0,
-      shortcuts: [],
-      screen: null,
-    };
-    phone.name = name;
-    phone.batteryPercent = numberOrNull(body.batteryPercent);
-    phone.charging = !!body.charging;
-    phone.lastSeenMs = now;
-    phone.mode = "remote-controller";
-    if (Array.isArray(body.shortcuts)) phone.shortcuts = sanitizeShortcuts(body.shortcuts);
-    if (!existing) {
-      phone.playback = null;
-      phone.music = [];
-      phone.lastError = null;
-      if (Array.isArray(body.schedules) && body.schedules.length) {
-        phone.schedules = body.schedules;
-        phone.scheduleRevision = 1;
-      }
-      book.phones.set(id, phone);
-    }
-    send(res, 200, { phone: publicPhone(phone, now) });
-    return;
-  }
-
-  const id = parts[2];
-  const phone = id ? book.phones.get(id) : null;
-  if (!phone) {
-    fail(res, 404, "phone not registered");
-    return;
-  }
-  const action = parts[3] || "";
-
-  if (req.method === "GET" && parts.length === 3) {
-    send(res, 200, { phone: publicPhone(phone, now) });
-    return;
-  }
-
-  if (req.method === "POST" && action === "heartbeat" && parts.length === 4) {
-    const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
-    phone.lastSeenMs = now;
-    if ("batteryPercent" in body) phone.batteryPercent = numberOrNull(body.batteryPercent);
-    if ("charging" in body) phone.charging = !!body.charging;
-    if ("playback" in body) phone.playback = body.playback;
-    if ("music" in body) phone.music = Array.isArray(body.music) ? body.music : [];
-    if (Array.isArray(body.shortcuts)) phone.shortcuts = sanitizeShortcuts(body.shortcuts);
-    if ("lastError" in body) phone.lastError = body.lastError ? String(body.lastError) : null;
-    const ack = new Set(Array.isArray(body.ack) ? body.ack.map(String) : []);
-    if (ack.size) phone.commands = phone.commands.filter((command) => !ack.has(command.id));
-    send(res, 200, {
-      commands: phone.commands,
-      schedules: phone.schedules,
-      scheduleRevision: phone.scheduleRevision,
-    });
-    return;
-  }
-
-  if (req.method === "POST" && action === "commands" && parts.length === 4) {
-    const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
-    const kind = String(body.kind || "");
-    if (!["play", "stop", "setVolume", "setSleep", "runShortcut"].includes(kind)) {
-      fail(res, 400, "unknown command");
-      return;
-    }
-    if (kind === "runShortcut" && !String(body.shortcutName || "").trim()) {
-      fail(res, 400, "shortcut name is required");
-      return;
-    }
-    phone.commandSeq += 1;
-    const command = {
-      id: "c" + phone.commandSeq,
-      seq: phone.commandSeq,
-      kind,
-      soundID: body.soundID ? String(body.soundID) : null,
-      volume: typeof body.volume === "number" ? body.volume : null,
-      sleepMinutes: Number.isInteger(body.sleepMinutes) ? body.sleepMinutes : null,
-      shortcutName: body.shortcutName ? String(body.shortcutName).trim() : null,
-    };
-    phone.commands.push(command);
-    send(res, 200, { command });
-    return;
-  }
-
-  if (action === "schedules" && parts.length === 4) {
-    if (req.method === "GET") {
-      send(res, 200, { schedules: phone.schedules, scheduleRevision: phone.scheduleRevision });
-      return;
-    }
-    if (req.method === "PUT") {
-      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
-      if (!Array.isArray(body.schedules)) {
-        fail(res, 400, "schedules must be a list");
-        return;
-      }
-      phone.schedules = body.schedules;
-      phone.scheduleRevision += 1;
-      send(res, 200, { schedules: phone.schedules, scheduleRevision: phone.scheduleRevision });
-      return;
-    }
-  }
-
-  if (action === "screen" && parts.length === 4) {
-    if (req.method === "POST") {
-      const body = await readBody(req);
-      if (!body.length) {
-        fail(res, 400, "empty frame");
-        return;
-      }
-      phone.screen = body;
-      phone.lastSeenMs = now;
-      send(res, 200, { ok: true, bytes: body.length });
-      return;
-    }
-    if (req.method === "GET") {
-      if (!phone.screen) {
-        send(res, 204, null);
-        return;
-      }
-      send(res, 200, phone.screen, "image/jpeg");
-      return;
-    }
-  }
-
-  fail(res, 404, "not found");
-}
-
-function sanitizeShortcuts(list) {
-  return list.slice(0, 40).map((item) => ({
-    name: String((item && item.name) || "").trim().slice(0, 80),
-    builtin: !!(item && item.builtin),
-    summary: String((item && item.summary) || "").slice(0, 160),
-  })).filter((item) => item.name);
-}
-
-function numberOrNull(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, Math.round(value)));
+  const body = await readRaw(req);
+  const result = await relay.dispatch(req.method, url.pathname, req.headers, body);
+  send(res, result.status, result.body, result.type);
 }
 
 function start(port, bind) {
@@ -265,7 +52,7 @@ function start(port, bind) {
 }
 
 async function selfTest() {
-  rooms.clear();
+  relay.rooms.clear();
   const server = start(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   const port = server.address().port;

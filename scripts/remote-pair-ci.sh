@@ -29,18 +29,37 @@ cleanup() {
   mkdir -p "${SHOTS}"
   cp -f /tmp/lojo-remote-ui/*.png "${SHOTS}/" 2>/dev/null || true
   rm -f /tmp/lojo-remote-pair
+  if [[ -n "${GATEWAY_STATE:-}" ]]; then
+    rm -rf "${GATEWAY_STATE}"
+  fi
 }
 trap cleanup EXIT
 
-BIND=127.0.0.1 PORT="${PORT}" ONLINE_MS=12000 node "${ROOT}/relay/server.js" >/tmp/lojo-remote-relay.log 2>&1 &
+# The pair talks to the site gateway, not the standalone loopback relay.
+if [[ ! -d "${ROOT}/sidecar/node_modules/express" ]]; then
+  (cd "${ROOT}/sidecar" && npm ci --omit=dev)
+fi
+GATEWAY_STATE="$(mktemp -d)"
+STATE_DIR="${GATEWAY_STATE}" \
+BIND=127.0.0.1 \
+PORT="${PORT}" \
+PUBNODE_URL="http://127.0.0.1:9" \
+LOJO_REMOTE_CODE="${CODE}" \
+ONLINE_MS=12000 \
+  node "${ROOT}/sidecar/server.js" >/tmp/lojo-remote-relay.log 2>&1 &
 RELAY_PID=$!
-for _ in $(seq 1 30); do
-  if curl -sf "http://127.0.0.1:${PORT}/health" | grep -q lojo-remote-relay; then
+for _ in $(seq 1 50); do
+  if curl -sf "http://127.0.0.1:${PORT}/health" | grep -q ranch-field-api; then
     break
   fi
   sleep 0.2
 done
-curl -sf "http://127.0.0.1:${PORT}/health" | grep -q lojo-remote-relay
+curl -sf "http://127.0.0.1:${PORT}/health" | grep -q ranch-field-api
+code_status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/v1/phones")"
+if [[ "${code_status}" != "401" ]]; then
+  echo "The gateway did not require the paired network code." >&2
+  exit 1
+fi
 
 bash scripts/ios-prepare.sh
 # Clone an already-compatible iPhone. Creating from the last device type fails

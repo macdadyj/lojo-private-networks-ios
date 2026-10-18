@@ -57,14 +57,6 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    TextField("Relay address", text: $relayURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("remote.settings.url")
-                    TextField("Network code", text: $networkCode)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("remote.settings.code")
                     TextField("Name for this iPhone", text: $remoteName)
                         .accessibilityIdentifier("remote.settings.name")
                     Toggle("This iPhone is the sound machine", isOn: Binding(
@@ -72,10 +64,20 @@ struct SettingsView: View {
                         set: { role = $0 ? "device" : "controller" }
                     ))
                     .accessibilityIdentifier("remote.settings.mode")
+                    DisclosureGroup("Advanced relay override") {
+                        TextField("Relay address", text: $relayURL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("remote.settings.url")
+                        TextField("Network code", text: $networkCode)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("remote.settings.code")
+                    }
                 } header: {
                     Text("iPhone Remote Controller")
                 } footer: {
-                    Text("Run the LOJO Networks relay on your site gateway, then enter its address, for example 100.96.1.18:8791. The network code is the shared passphrase for your phones. It is not stored in the app's source.")
+                    Text("Both phones use the site gateway you already paired. Leave this screen open on the spare iPhone and turn on the sound machine. The override is only for a relay that is not that gateway.")
                 }
 
                 Section("Appearance") {
