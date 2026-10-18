@@ -126,7 +126,19 @@ targets:
     sources:
       - path: Tests/LojoNetworksTests
       - path: Tests/LojoRemoteTests
+      - path: Tests/PinnedRelayHTTPS
+      - path: Sources/LojoNetworks/Model/Models.swift
+      - path: Sources/LojoNetworks/Services/GatewayAddress.swift
+      - path: Sources/LojoNetworks/Services/GatewayClient.swift
+      - path: Sources/LojoNetworks/Services/PinnedHTTPS.swift
+      - path: Sources/LojoNetworks/Services/PinnedRelayTransport.swift
+      - path: Sources/LojoNetworks/Services/PlainHTTP.swift
+      - path: Sources/LojoNetworks/Services/SiteTrust.swift
+      - path: Tests/PinnedRelayHTTPS/PinnedHTTPSFixture
+        optional: true
+        buildPhase: resources
     dependencies:
+      - target: LojoTrust
       - target: LojoTerminalScroll
       - target: LojoRemote
     settings:

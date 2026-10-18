@@ -151,6 +151,35 @@ final class RemoteLogicTests: XCTestCase {
         }
     }
 
+    func testRemotePathPrefersTheOverlayOffSiteWiFi() {
+        let lan = "https://192.168.7.103:8443"
+        let overlay = "https://100.96.1.18:8443"
+        XCTAssertTrue(RemotePathOrder.onSiteWiFi(lanHost: "192.168.7.103", wifiIPv4: "192.168.7.50"))
+        XCTAssertFalse(RemotePathOrder.onSiteWiFi(lanHost: "192.168.7.103", wifiIPv4: nil))
+        XCTAssertFalse(RemotePathOrder.onSiteWiFi(lanHost: "192.168.7.103", wifiIPv4: "10.0.0.8"))
+        XCTAssertFalse(RemotePathOrder.onSiteWiFi(lanHost: "192.168.7.103", wifiIPv4: "100.96.1.89"))
+        XCTAssertEqual(
+            RemotePathOrder.order(lanURL: lan, overlayURL: overlay, connectedURL: nil, onSiteWiFi: true),
+            [lan, overlay]
+        )
+        XCTAssertEqual(
+            RemotePathOrder.order(lanURL: lan, overlayURL: overlay, connectedURL: lan, onSiteWiFi: true),
+            [lan, overlay]
+        )
+        XCTAssertEqual(
+            RemotePathOrder.order(lanURL: lan, overlayURL: overlay, connectedURL: nil, onSiteWiFi: false),
+            [overlay, lan]
+        )
+        XCTAssertEqual(
+            RemotePathOrder.order(lanURL: lan, overlayURL: overlay, connectedURL: lan, onSiteWiFi: false),
+            [overlay, lan]
+        )
+        XCTAssertEqual(
+            RemotePathOrder.order(lanURL: lan, overlayURL: overlay, connectedURL: overlay, onSiteWiFi: false),
+            [overlay, lan]
+        )
+    }
+
     func testFrameInboxParsesOnePost() {
         let body = Data([0xff, 0xd8, 0xff, 0xd9])
         var raw = Data("POST /frame HTTP/1.1\r\nHost: 127.0.0.1:47221\r\nContent-Length: 4\r\n\r\n".utf8)

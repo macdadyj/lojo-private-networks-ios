@@ -48,6 +48,7 @@ enum RemotePreferences {
 @MainActor
 final class RemoteControllerStore: ObservableObject {
     @Published private(set) var phones: [RemotePhone] = []
+    @Published private(set) var unreachable = false
     @Published var message: String?
     @Published var selectedSoundID = BundledSound.whiteNoise.rawValue
     let demo: Bool
@@ -64,15 +65,26 @@ final class RemoteControllerStore: ObservableObject {
     func refresh() async {
         if demo { return }
         guard !siteAccess.clients().isEmpty else {
+            unreachable = false
             message = siteAccess.missingMessage()
             phones = []
             return
         }
         do {
             phones = try await siteAccess.first { try await $0.list() }
-            message = nil
+            unreachable = false
+            if let url = siteAccess.lastURL {
+                message = phones.isEmpty
+                    ? "Reached \(url.absoluteString). No spare iPhone is registered there."
+                    : "Reached \(url.absoluteString)."
+            } else {
+                message = nil
+            }
         } catch {
-            message = "Can't reach the site gateway."
+            unreachable = true
+            phones = []
+            let detail = siteAccess.lastFailure ?? RemoteDiagnostics.text(error)
+            message = "Can't reach the site gateway.\n\(detail)"
         }
     }
 

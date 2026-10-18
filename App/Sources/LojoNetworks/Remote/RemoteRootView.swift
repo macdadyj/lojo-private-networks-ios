@@ -25,8 +25,10 @@ struct RemoteRootView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("remote.gateway.message")
                     }
-                    if remote.phones.isEmpty {
+                    if remote.phones.isEmpty && !remote.unreachable {
                         EmptyStateCard(
                             systemImage: "iphone.gen3",
                             title: "No spare iPhones yet",
