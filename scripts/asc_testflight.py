@@ -124,33 +124,26 @@ def find_build(token, app_id, version):
     return pick_build(data, version)
 
 
-def adopt(wait_seconds):
-    """Release the newest upload that is newer than build 16, if one exists."""
+def adopt(version, wait_seconds):
+    """Finish this run's upload if App Store Connect is still processing it.
+
+    An older VALID build must not skip the archive for this run.
+    """
+    if not version:
+        raise SystemExit("Missing build number.")
     token = signing.jwt_from_env()
     app_id = find_app(token)
     rows = []
     for item in fetch_builds(token, app_id).get("data", []):
         attributes = item.get("attributes") or {}
-        version = str(attributes.get("version"))
-        rows.append((version, attributes.get("processingState"), attributes.get("uploadedDate")))
-    if not rows:
-        show("recent build versions: none")
-    for version, state, uploaded in rows:
-        show(f"build {version} state={state} uploaded={uploaded}")
-    usable = []
-    for version, state, _uploaded in rows:
-        if not version.isdigit() or int(version) < 32:
-            continue
-        # A failed upload is finished. It must not block the next build number.
-        if state in ("FAILED", "INVALID"):
-            continue
-        usable.append(int(version))
-    if not usable:
-        show("no in-progress upload newer than 16")
+        found = str(attributes.get("version"))
+        rows.append((found, attributes.get("processingState"), attributes.get("uploadedDate")))
+    match = [state for found, state, _uploaded in rows if found == str(version)]
+    if match != ["PROCESSING"]:
+        show(f"build {version} is not processing yet")
         raise SystemExit(2)
-    newest = str(max(usable))
-    show(f"adopting build {newest}")
-    release(newest, wait_seconds, True)
+    show(f"adopting build {version}")
+    release(str(version), wait_seconds, True)
 
 
 def refresh_detail(token, build_id):
@@ -656,7 +649,7 @@ def main():
         key_file = prepare_key()
         try:
             if command == "adopt":
-                adopt(wait_seconds)
+                adopt(version or os.environ.get("BUILD_NUMBER", ""), wait_seconds)
             else:
                 if not version:
                     raise SystemExit("Missing build number.")

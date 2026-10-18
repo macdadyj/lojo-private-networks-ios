@@ -164,7 +164,7 @@ write_api_key
 # Build 38 uploaded with that version and was accepted for processing.
 # The old lookup hid any build that did not yet have a beta detail.
 set +e
-python3 "${SCRIPT_DIR}/asc_testflight.py" adopt --wait-seconds 2400
+python3 "${SCRIPT_DIR}/asc_testflight.py" adopt --build "${BUILD_NUMBER}" --wait-seconds 2400
 adopt=$?
 set -e
 if [[ "${adopt}" -eq 0 ]]; then
