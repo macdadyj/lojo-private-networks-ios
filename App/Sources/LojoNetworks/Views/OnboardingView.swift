@@ -11,15 +11,15 @@ struct OnboardingView: View {
     }
 
     private let pages: [Page] = [
-        Page(icon: "point.3.connected.trianglepath.dotted",
-             title: "Your devices.\nYour network.",
-             body: "Connect the gear you already own — ranch Pis, gate cameras, pump relays, lab machines — into one private network you control."),
+        Page(icon: "qrcode.viewfinder",
+             title: "Pair this phone",
+             body: "On the site gateway, show the pairing code. Scan it with the Camera app, or paste it in Settings. Both phones must pair to the same site. You never type a relay address."),
         Page(icon: "lock.shield.fill",
-             title: "Private by design",
-             body: "On site, your phone talks to your gateway over Wi‑Fi. Away, your LOJO VPN profile joins it to an encrypted private overlay. No open ports, no public camera links."),
-        Page(icon: "hand.tap.fill",
-             title: "In your hands, anywhere",
-             body: "See what's online, pull a fresh camera still, and switch relays with a confirmation step — on site Wi‑Fi or from the road."),
+             title: "Two private paths",
+             body: "At the site, the phone uses Wi‑Fi. Away, connect the LOJO VPN profile and the phone uses the private overlay. Traffic stays on your network."),
+        Page(icon: "iphone.gen3",
+             title: "One phone plays.\nThe other controls.",
+             body: "Open Remote Controller on the spare phone and leave that screen up. On this phone, play a sound, set a stop time, or save a schedule. The spare phone shows the address it tried if it cannot reach the gateway."),
     ]
 
     var body: some View {
@@ -39,6 +39,7 @@ struct OnboardingView: View {
                             withAnimation { page = pages.count - 1 }
                         }
                         .font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier("onboarding.skip")
                     }
                 }
                 .foregroundStyle(.white)
@@ -65,13 +66,14 @@ struct OnboardingView: View {
                             Haptics.success()
                             onFinish(false)
                         } label: {
-                            Text("Connect my network")
+                            Text("Pair my site")
                                 .font(.body.weight(.semibold))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 15)
                                 .foregroundStyle(LojoTheme.accentDeep)
                                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white))
                         }
+                        .accessibilityIdentifier("onboarding.pair")
                         Button {
                             Haptics.light()
                             onFinish(true)
@@ -83,6 +85,7 @@ struct OnboardingView: View {
                                 .foregroundStyle(.white)
                                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.6), lineWidth: 1.5))
                         }
+                        .accessibilityIdentifier("onboarding.demo")
                     } else {
                         Button {
                             withAnimation { page += 1 }
@@ -94,6 +97,7 @@ struct OnboardingView: View {
                                 .foregroundStyle(LojoTheme.accentDeep)
                                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white))
                         }
+                        .accessibilityIdentifier("onboarding.continue")
                     }
                 }
                 .padding(.horizontal, 24)
@@ -105,28 +109,30 @@ struct OnboardingView: View {
     }
 
     private func pageView(_ p: Page) -> some View {
-        VStack(spacing: 26) {
-            Spacer()
-            ZStack {
-                Circle().fill(.white.opacity(0.12)).frame(width: 150, height: 150)
-                Circle().fill(.white.opacity(0.10)).frame(width: 110, height: 110)
-                Image(systemName: p.icon)
-                    .font(.system(size: 54, weight: .semibold))
+        ScrollView {
+            VStack(spacing: 26) {
+                ZStack {
+                    Circle().fill(.white.opacity(0.12)).frame(width: 150, height: 150)
+                    Circle().fill(.white.opacity(0.10)).frame(width: 110, height: 110)
+                    Image(systemName: p.icon)
+                        .font(.system(size: 54, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .accessibilityHidden(true)
+                .padding(.top, 28)
+                Text(p.title)
+                    .font(.largeTitle.weight(.bold))
+                    .multilineTextAlignment(.center)
                     .foregroundStyle(.white)
+                    .minimumScaleFactor(0.7)
+                Text(p.body)
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.88))
+                    .padding(.horizontal, 32)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .accessibilityHidden(true)
-            Text(p.title)
-                .font(.largeTitle.weight(.bold))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
-            Text(p.body)
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.white.opacity(0.88))
-                .padding(.horizontal, 32)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Spacer()
+            .frame(maxWidth: .infinity)
         }
         .accessibilityElement(children: .combine)
     }

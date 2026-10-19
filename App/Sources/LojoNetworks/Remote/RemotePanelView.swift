@@ -30,8 +30,13 @@ struct RemotePanelView: View {
                     sleep
                     links
                 } else {
-                    Text("This iPhone is no longer on the relay.")
-                        .foregroundStyle(.secondary)
+                    EmptyStateCard(
+                        systemImage: "iphone.slash",
+                        title: "This phone left the site",
+                        message: "It stopped checking in. On that phone, open Remote Controller and leave the screen up. This phone shows the gateway address and the error when the list cannot be loaded.",
+                        primary: nil,
+                        secondary: nil
+                    )
                 }
                 if let message = remote.message {
                     Text(message)
@@ -60,14 +65,17 @@ struct RemotePanelView: View {
     }
 
     private func status(_ phone: RemotePhone) -> some View {
-        HStack {
-            Text(phone.statusLabel)
-                .font(.headline)
-                .foregroundStyle(phone.online ? LojoTheme.online : .secondary)
-            Spacer()
-            Text(phone.batteryLabel)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            StatusDot(style: phone.online ? .online : .offline, size: 12)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(phone.statusLabel)
+                    .font(.headline)
+                    .foregroundStyle(phone.online ? LojoTheme.online : .secondary)
+                Text(phone.batteryLabel)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
         .card()
         .accessibilityIdentifier("remote.status")
@@ -103,6 +111,7 @@ struct RemotePanelView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .accessibilityIdentifier("remote.play")
 
             Button {
@@ -113,6 +122,7 @@ struct RemotePanelView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .controlSize(.large)
             .accessibilityIdentifier("remote.stop")
         }
     }

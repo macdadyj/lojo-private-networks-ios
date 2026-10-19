@@ -75,6 +75,8 @@ targets:
     sources:
       - path: Sources/LojoNetworks
       - path: Resources/Assets.xcassets
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - target: LojoSSH
       - target: LojoTrust
