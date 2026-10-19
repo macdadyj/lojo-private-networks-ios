@@ -32,7 +32,7 @@ struct MusicLibraryView: View {
                 } else {
                     Button("All sections") { scope = "sections" }
                         .accessibilityIdentifier("remote.library.sections")
-                    if phone?.music.isEmpty != false {
+                    if shown.isEmpty {
                         EmptyStateCard(
                             systemImage: "music.note",
                             title: "Nothing in this list",
@@ -41,7 +41,7 @@ struct MusicLibraryView: View {
                             secondary: nil
                         )
                     }
-                    ForEach(phone?.music ?? []) { track in
+                    ForEach(shown) { track in
                         Button {
                             Task { await open(track) }
                         } label: {
@@ -63,7 +63,7 @@ struct MusicLibraryView: View {
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("remote.library.item.\(track.id)")
                     }
-                    if let page = phone?.music.first?.page, let count = phone?.music.first?.pageCount, page + 1 < count {
+                    if let page = shown.first?.page, let count = shown.first?.pageCount, page + 1 < count {
                         Button("Next page") {
                             Task { await show(scope, parent: parent, page: page + 1) }
                         }
@@ -83,6 +83,13 @@ struct MusicLibraryView: View {
                 await show(startScope, parent: "")
             }
         }
+    }
+
+    private var shown: [MusicTrack] {
+        if remote.demo, scope != "sections" {
+            return DemoLibrary.page(scope: scope, page: 0, parent: parent, query: query)
+        }
+        return phone?.music ?? []
     }
 
     private func section(_ title: String, scope: String, systemImage: String) -> some View {
@@ -105,6 +112,7 @@ struct MusicLibraryView: View {
     private func show(_ scope: String, parent: String, page: Int = 0) async {
         self.scope = scope
         self.parent = parent
+        self.query = query
         await remote.browse(phoneID: phoneID, scope: scope, page: page, parent: parent, query: query)
     }
 

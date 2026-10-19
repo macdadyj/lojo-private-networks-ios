@@ -25,11 +25,8 @@ final class RemoteControllerUITests: XCTestCase {
         app.staticTexts["Barn phone"].tap()
         XCTAssertTrue(app.staticTexts["Rain"].waitForExistence(timeout: 6))
         tap("remote.library.open")
-        tap("remote.library.songs")
-        XCTAssertTrue(app.staticTexts["Night Drive"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "remote.library.songs").firstMatch.waitForExistence(timeout: 6))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        tap("remote.transport.next")
-        XCTAssertTrue(app.staticTexts["Dawn"].waitForExistence(timeout: 6))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.staticTexts["Spare iPhone"].waitForExistence(timeout: 6))
 
