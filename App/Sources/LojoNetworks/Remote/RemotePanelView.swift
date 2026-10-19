@@ -307,38 +307,50 @@ struct ScheduleEditorView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Button("Add bedtime white noise and morning off") {
-                    schedules.append(SampleAutomations.bedtimeSchedule)
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("remote.schedule.add-overnight")
-                Text("Bedtime white noise starts at 8:00 PM and Morning off stops it at 6:00 AM. The spare iPhone runs this itself. The same names are also Shortcuts.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                ForEach($schedules) { $schedule in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(schedule.soundTitle).font(.headline)
-                        Toggle("Enabled", isOn: $schedule.enabled)
-                        Picker("Sound", selection: $schedule.soundID) {
-                            ForEach(BundledSound.allCases) { sound in
-                                Text(sound.title).tag(sound.rawValue)
-                            }
-                        }
-                        DatePicker("Starts", selection: binding(minutes: $schedule.startMinutes), displayedComponents: .hourAndMinute)
-                        DatePicker("Stops", selection: binding(minutes: $schedule.stopMinutes), displayedComponents: .hourAndMinute)
-                        Button("Remove", role: .destructive) {
-                            schedules.removeAll { $0.id == schedule.id }
-                        }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Bedtime and morning")
+                        .font(.title3.weight(.semibold))
+                    Text("White noise starts at 8:00 PM and stops at 6:00 AM. The spare phone runs that window while Remote Controller stays open there. Bedtime white noise and Morning off are also Shortcuts.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        addBedtime()
+                    } label: {
+                        Label("Add bedtime white noise", systemImage: "moon.stars")
+                            .frame(maxWidth: .infinity)
                     }
-                    .card()
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .accessibilityIdentifier("remote.schedule.add-overnight")
                 }
-                Button("Save") {
+                .card()
+
+                if schedules.isEmpty {
+                    EmptyStateCard(
+                        systemImage: "clock",
+                        title: "No schedule yet",
+                        message: "Add bedtime white noise. You can change the sound and the start and stop times before you save.",
+                        primary: nil,
+                        secondary: nil
+                    )
+                }
+
+                ForEach($schedules) { $schedule in
+                    scheduleCard($schedule)
+                }
+
+                Button {
                     Task {
                         await remote.save(schedules: schedules, phoneID: phoneID)
                         dismiss()
                     }
+                } label: {
+                    Text("Save")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .accessibilityIdentifier("remote.schedule.save")
             }
             .padding(16)
@@ -351,6 +363,38 @@ struct ScheduleEditorView: View {
             loaded = true
             schedules = remote.phones.first { $0.id == phoneID }?.schedules ?? []
         }
+    }
+
+    private func addBedtime() {
+        let sample = SampleAutomations.bedtimeSchedule
+        guard !schedules.contains(where: { $0.id == sample.id }) else { return }
+        schedules.append(sample)
+    }
+
+    private func scheduleCard(_ schedule: Binding<SoundSchedule>) -> some View {
+        let value = schedule.wrappedValue
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(value.soundTitle)
+                .font(.headline)
+            Text(value.windowLabel)
+                .font(.title2.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Plays \(value.windowLabel)")
+            Toggle("Enabled", isOn: schedule.enabled)
+            Picker("Sound", selection: schedule.soundID) {
+                ForEach(BundledSound.allCases) { sound in
+                    Text(sound.title).tag(sound.rawValue)
+                }
+            }
+            DatePicker("Starts", selection: binding(minutes: schedule.startMinutes), displayedComponents: .hourAndMinute)
+            DatePicker("Stops", selection: binding(minutes: schedule.stopMinutes), displayedComponents: .hourAndMinute)
+            Button("Remove", role: .destructive) {
+                schedules.removeAll { $0.id == value.id }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .card()
+        .accessibilityElement(children: .contain)
     }
 
     private func binding(minutes: Binding<Int>) -> Binding<Date> {
