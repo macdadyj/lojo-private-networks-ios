@@ -76,7 +76,7 @@ struct PairingView: View {
             Section("Gateway") {
                 LabeledContent("Network", value: offer.name)
                 if let lan = offer.lan { addressRow("Site Wi‑Fi", lan) }
-                if let ov = offer.overlay { addressRow("Overlay", ov) }
+                if let ov = offer.overlay { addressRow("Private overlay", ov) }
             }
 
             Section {

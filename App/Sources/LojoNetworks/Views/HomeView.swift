@@ -14,13 +14,33 @@ struct HomeView: View {
                 Button {
                     router.showRemote = true
                 } label: {
-                    Label("iPhone Remote Controller", systemImage: "iphone.gen3")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 14) {
+                        Image(systemName: "iphone.gen3")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(LojoTheme.accent)
+                            .frame(width: 44, height: 44)
+                            .background(Circle().fill(LojoTheme.accent.opacity(0.12)))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Remote Controller")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text("Sounds, schedules, and Shortcuts on the spare phone.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .buttonStyle(.plain)
                 .card()
                 .accessibilityIdentifier("remote.open")
+                .accessibilityLabel("Remote Controller")
+                .accessibilityHint("Opens the spare phone controls")
                 if store.isStale {
                     StaleBanner()
                 }
