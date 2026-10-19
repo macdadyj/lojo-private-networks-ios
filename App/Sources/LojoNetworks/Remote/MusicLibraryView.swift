@@ -4,10 +4,12 @@ import UIKit
 
 struct MusicLibraryView: View {
     let phoneID: String
+    var startScope = "sections"
     @EnvironmentObject private var remote: RemoteControllerStore
     @State private var query = ""
     @State private var scope = "sections"
     @State private var parent = ""
+    @State private var started = false
 
     private var phone: RemotePhone? { remote.phones.first { $0.id == phoneID } }
 
@@ -74,6 +76,13 @@ struct MusicLibraryView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(scope == "sections" ? "Music" : scope.capitalized)
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard !started else { return }
+            started = true
+            if startScope != "sections" {
+                await show(startScope, parent: "")
+            }
+        }
     }
 
     private func section(_ title: String, scope: String, systemImage: String) -> some View {

@@ -4,6 +4,7 @@ import SwiftUI
 private enum PanelPage: Hashable, Identifiable {
     case schedule
     case help
+    case library
 
     var id: Self { self }
 }
@@ -12,7 +13,7 @@ struct RemotePanelView: View {
     let phoneID: String
     @EnvironmentObject private var remote: RemoteControllerStore
     @State private var panelPage: PanelPage?
-    @State private var showLibrary = false
+    @State private var libraryScope = "sections"
 
     private var phone: RemotePhone? { remote.phones.first { $0.id == phoneID } }
 
@@ -53,9 +54,6 @@ struct RemotePanelView: View {
         .navigationDestination(item: $panelPage) { page in
             panelDestination(page)
         }
-        .navigationDestination(isPresented: $showLibrary) {
-            MusicLibraryView(phoneID: phoneID)
-        }
         .safeAreaInset(edge: .bottom) {
             if let phone, phone.playback?.playing == true || phone.playback?.title != nil {
                 nowPlayingBar(phone)
@@ -70,6 +68,8 @@ struct RemotePanelView: View {
             ScheduleEditorView(phoneID: phoneID)
         case .help:
             RemoteHelpView()
+        case .library:
+            MusicLibraryView(phoneID: phoneID, startScope: libraryScope)
         }
     }
 
@@ -104,7 +104,8 @@ struct RemotePanelView: View {
                 }
                 .accessibilityIdentifier("remote.transport.next")
                 Button {
-                    showLibrary = true
+                    libraryScope = "queue"
+                    panelPage = .library
                     Task { await remote.browse(phoneID: phoneID, scope: "queue") }
                 } label: {
                     Image(systemName: "list.bullet")
@@ -169,6 +170,7 @@ struct RemotePanelView: View {
     }
 
     private var controls: some View {
+        VStack(spacing: 12) {
         HStack(spacing: 12) {
             Button {
                 Haptics.light()
@@ -192,6 +194,20 @@ struct RemotePanelView: View {
             .controlSize(.large)
             .accessibilityIdentifier("remote.stop")
         }
+        NavigationLink {
+            MusicLibraryView(phoneID: phoneID)
+        } label: {
+            HStack {
+                Label("Music library", systemImage: "music.note.list")
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 8)
+        }
+        .accessibilityIdentifier("remote.library.open")
+        }
     }
 
     private func sounds(_ phone: RemotePhone) -> some View {
@@ -201,19 +217,6 @@ struct RemotePanelView: View {
             ForEach(BundledSound.allCases) { sound in
                 soundButton(id: sound.rawValue, title: sound.title, systemImage: sound.systemImage)
             }
-            Button {
-                showLibrary = true
-            } label: {
-                HStack {
-                    Label("Music library", systemImage: "music.note.list")
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("remote.library.open")
             Text("Search, recent songs, playlists, artists, albums, and songs come from the spare phone. Large libraries arrive one page at a time.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
