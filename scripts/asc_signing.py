@@ -2,9 +2,10 @@
 """Create an iOS Distribution certificate and App Store profiles.
 
 Uses the App Store Connect REST API (ES256 JWT, audience appstoreconnect-v1).
-Does not print private keys, API tokens, or certificate passwords. The only
-certificate it ever revokes is the one it created itself in the same run (the
-id recorded in the run's signing manifest), and only in the cleanup step.
+Does not print private keys, API tokens, or certificate passwords. Cleanup
+revokes only the certificate id recorded for this run. If creation hits the
+distribution certificate limit, one older certificate whose subject is
+"LOJO Networks Distribution" is revoked, and creation is tried once more.
 """
 
 import base64
@@ -272,7 +273,20 @@ def delete_profile(token, profile_id):
 
 
 def create_certificate(token, csr_text):
-    status, body = api(
+    status, body = post_certificate(token, csr_text)
+    if status not in (200, 201) and certificate_limit(body):
+        if revoke_one_automation_certificate(token):
+            status, body = post_certificate(token, csr_text)
+    parsed = parse_data(status, body, "certificate")
+    attributes = parsed["data"].get("attributes", {})
+    content = attributes.get("certificateContent")
+    if not content:
+        stop_api(status, body, "certificate")
+    return parsed["data"]["id"], base64.b64decode(content)
+
+
+def post_certificate(token, csr_text):
+    return api(
         token,
         "POST",
         "/v1/certificates",
@@ -286,12 +300,59 @@ def create_certificate(token, csr_text):
             }
         },
     )
-    parsed = parse_data(status, body, "certificate")
-    attributes = parsed["data"].get("attributes", {})
-    content = attributes.get("certificateContent")
-    if not content:
-        stop_api(status, body, "certificate")
-    return parsed["data"]["id"], base64.b64decode(content)
+
+
+def certificate_subject(der):
+    result = subprocess.run(
+        ["openssl", "x509", "-inform", "DER", "-noout", "-subject"],
+        input=der,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.decode()
+
+
+def revoke_one_automation_certificate(token):
+    """Delete the oldest distribution certificate this automation created.
+
+    The common name is the one in archive-upload.sh. Any other certificate
+    is left in place.
+    """
+    query = urllib.parse.urlencode({
+        "filter[certificateType]": CERTIFICATE_TYPE,
+        "limit": "20",
+    })
+    status, body = api(token, "GET", "/v1/certificates?" + query)
+    if status != 200:
+        return False
+    try:
+        items = json.loads(body).get("data") or []
+    except json.JSONDecodeError:
+        return False
+    matches = []
+    for item in items:
+        attributes = item.get("attributes") or {}
+        content = attributes.get("certificateContent")
+        if not content:
+            continue
+        try:
+            der = base64.b64decode(content)
+        except Exception:
+            continue
+        if "LOJO Networks Distribution" not in certificate_subject(der):
+            continue
+        matches.append((attributes.get("expirationDate") or "", item.get("id") or ""))
+    matches = [(when, cert_id) for when, cert_id in matches if cert_id]
+    if not matches:
+        return False
+    matches.sort()
+    cert_id = matches[0][1]
+    status, _body = api(token, "DELETE", "/v1/certificates/" + urllib.parse.quote(cert_id))
+    if status not in (204, 404):
+        return False
+    print("Revoked one older LOJO Networks Distribution certificate to make room.", flush=True)
+    return True
 
 
 def create_profile(token, name, bundle_resource_id, certificate_id):
@@ -553,7 +614,68 @@ def self_test():
     export_roundtrip()
     forbidden_roundtrip()
     cleanup_roundtrip()
+    limit_retry_roundtrip()
     print("asc signing ok")
+
+
+def limit_retry_roundtrip():
+    with tempfile.TemporaryDirectory() as tmp:
+        ours = Path(tmp) / "ours.der"
+        other = Path(tmp) / "other.der"
+        older = Path(tmp) / "older.der"
+        for path, name in (
+            (ours, "LOJO Networks Distribution"),
+            (older, "LOJO Networks Distribution"),
+            (other, "Someone Else"),
+        ):
+            subprocess.run(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(Path(tmp) / (path.name + ".key")),
+                    "-out", str(path), "-outform", "DER",
+                    "-subj", f"/CN={name}", "-days", "30",
+                ],
+                check=True,
+                capture_output=True,
+            )
+        ours_b64 = base64.b64encode(ours.read_bytes()).decode()
+        older_b64 = base64.b64encode(older.read_bytes()).decode()
+        other_b64 = base64.b64encode(other.read_bytes()).decode()
+    calls = []
+
+    def fake_api(token, method, path, payload=None):
+        calls.append((method, path))
+        if method == "POST" and path == "/v1/certificates":
+            if not any(item[0] == "DELETE" for item in calls):
+                return 409, "You have already reached the maximum number of certificates of this type."
+            return 201, json.dumps({
+                "data": {
+                    "id": "NEW",
+                    "attributes": {"certificateContent": base64.b64encode(b"new-der").decode()},
+                }
+            })
+        if method == "GET" and path.startswith("/v1/certificates?"):
+            return 200, json.dumps({"data": [
+                {"id": "OTHER", "attributes": {"expirationDate": "2020-01-01T00:00:00Z", "certificateContent": other_b64}},
+                {"id": "OLDER", "attributes": {"expirationDate": "2021-01-01T00:00:00Z", "certificateContent": older_b64}},
+                {"id": "OURS", "attributes": {"expirationDate": "2022-01-01T00:00:00Z", "certificateContent": ours_b64}},
+            ]})
+        if method == "DELETE":
+            return 204, ""
+        return 404, "{}"
+
+    real_api = globals()["api"]
+    globals()["api"] = fake_api
+    try:
+        cert_id, der = create_certificate("token", "csr")
+    finally:
+        globals()["api"] = real_api
+    if cert_id != "NEW" or der != b"new-der":
+        raise SystemExit("certificate limit retry did not create a replacement")
+    if ("DELETE", "/v1/certificates/OLDER") not in calls:
+        raise SystemExit("certificate limit retry did not revoke the oldest automation certificate")
+    if ("DELETE", "/v1/certificates/OTHER") in calls or ("DELETE", "/v1/certificates/OURS") in calls:
+        raise SystemExit("certificate limit retry revoked the wrong certificate")
 
 
 def der_roundtrip():
