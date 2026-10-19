@@ -223,6 +223,19 @@ jobs:
       - name: Unit tests
         run: bash scripts/ios-unit-test.sh
 
+      - name: Confirm build 56 is in the internal group
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: python3 scripts/asc_testflight.py group-membership --build 56
+
+      - name: Import shared distribution certificate
+        env:
+          DIST_CERT_P12: ${{ secrets.DIST_CERT_P12 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+        run: scripts/archive-upload.sh --import-keychain
+
       - name: Archive and upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -230,3 +243,7 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
         run: scripts/archive-upload.sh
+
+      - name: Delete temporary signing keychain
+        if: always()
+        run: scripts/archive-upload.sh --delete-keychain

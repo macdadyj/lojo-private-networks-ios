@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Create an iOS Distribution certificate and App Store profiles.
+"""Install App Store profiles for the shared iOS Distribution certificate.
 
 Uses the App Store Connect REST API (ES256 JWT, audience appstoreconnect-v1).
-Does not print private keys, API tokens, or certificate passwords. Cleanup
-revokes only the certificate id recorded for this run. If creation hits the
-distribution certificate limit, one older certificate whose subject is
-"LOJO Networks Distribution" is revoked, and creation is tried once more.
+Does not print private keys, API tokens, certificate bytes, or passwords.
+Does not create or delete distribution certificates. Profiles are fetched or
+created for com.lojo.PrivateNetworks and any app extensions, and each profile
+is tied to certificate VJ5MXTN7UT.
 """
 
 import base64
+import hashlib
 import io
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,24 +22,34 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 API_ROOT = "https://api.appstoreconnect.apple.com"
 PROFILE_TYPE = "IOS_APP_STORE"
-CERTIFICATE_TYPE = "IOS_DISTRIBUTION"
+DISTRIBUTION_CERTIFICATE_ID = "VJ5MXTN7UT"
+APP_BUNDLE_ID = "com.lojo.PrivateNetworks"
 TARGETS = (
-    ("com.lojo.PrivateNetworks", "LOJO Networks App Store"),
+    (APP_BUNDLE_ID, "LOJO Networks App Store"),
 )
 BUNDLE_NAMES = {
-    "com.lojo.PrivateNetworks": "LOJO Networks",
+    APP_BUNDLE_ID: "LOJO Networks",
 }
 SIGNING_KEYS = (
     "CODE_SIGN_STYLE",
     "CODE_SIGN_IDENTITY",
+    "CODE_SIGNING_ALLOWED",
     "DEVELOPMENT_TEAM",
     "PROVISIONING_PROFILE_SPECIFIER",
     "OTHER_CODE_SIGN_FLAGS",
 )
+DISTRIBUTION_PRODUCT_TYPES = {
+    "com.apple.product-type.application",
+    "com.apple.product-type.app-extension",
+    "com.apple.product-type.app-extension.intents-service",
+    "com.apple.product-type.app-extension.messages",
+    "com.apple.product-type.extensionkit-extension",
+}
 
 
 def b64url(data):
@@ -248,23 +260,6 @@ def ensure_bundle_id(token, identifier, name):
     return parsed["data"]["id"]
 
 
-def delete_named_profiles(token, name):
-    query = urllib.parse.urlencode(
-        {
-            "filter[name]": name,
-            "filter[profileType]": PROFILE_TYPE,
-            "limit": "20",
-        }
-    )
-    status, body = api(token, "GET", "/v1/profiles?" + query)
-    parsed = parse_data(status, body, "profile lookup")
-    for item in parsed["data"]:
-        attributes = item.get("attributes", {})
-        if attributes.get("name") != name or attributes.get("profileType") != PROFILE_TYPE:
-            continue
-        delete_profile(token, item["id"])
-
-
 def delete_profile(token, profile_id):
     status, body = api(token, "DELETE", "/v1/profiles/" + urllib.parse.quote(profile_id))
     if status in (204, 404):
@@ -272,87 +267,222 @@ def delete_profile(token, profile_id):
     stop_api(status, body, "profile delete")
 
 
-def create_certificate(token, csr_text):
-    status, body = post_certificate(token, csr_text)
-    if status not in (200, 201) and certificate_limit(body):
-        if revoke_one_automation_certificate(token):
-            status, body = post_certificate(token, csr_text)
+def preferred_profile_name(bundle_id):
+    if bundle_id == APP_BUNDLE_ID:
+        return "LOJO Networks App Store"
+    leaf = bundle_id.rsplit(".", 1)[-1]
+    return f"LOJO {leaf} App Store"[:50]
+
+
+def bundle_display_name(bundle_id):
+    if bundle_id in BUNDLE_NAMES:
+        return BUNDLE_NAMES[bundle_id]
+    return f"LOJO {bundle_id.rsplit('.', 1)[-1]}"
+
+
+def fetch_distribution_certificate(token):
+    """Read the shared certificate. Never creates one."""
+    cert_id = DISTRIBUTION_CERTIFICATE_ID
+    status, body = api(token, "GET", "/v1/certificates/" + urllib.parse.quote(cert_id))
     parsed = parse_data(status, body, "certificate")
-    attributes = parsed["data"].get("attributes", {})
+    attributes = parsed["data"].get("attributes") or {}
+    kind = attributes.get("certificateType") or "unknown"
+    if kind != "IOS_DISTRIBUTION":
+        raise SystemExit(
+            f"App Store Connect certificate {cert_id} is {kind}, not an iOS Distribution certificate. "
+            "No certificate was created."
+        )
     content = attributes.get("certificateContent")
     if not content:
-        stop_api(status, body, "certificate")
-    return parsed["data"]["id"], base64.b64decode(content)
+        raise SystemExit(
+            "The shared distribution certificate had no content. No certificate was created."
+        )
+    try:
+        der = base64.b64decode(content)
+    except Exception:
+        raise SystemExit(
+            "The shared distribution certificate could not be read. No certificate was created."
+        )
+    return cert_id, der
 
 
-def post_certificate(token, csr_text):
-    return api(
-        token,
-        "POST",
-        "/v1/certificates",
-        {
-            "data": {
-                "type": "certificates",
-                "attributes": {
-                    "certificateType": CERTIFICATE_TYPE,
-                    "csrContent": csr_text,
-                },
-            }
-        },
-    )
+def identity_text_matches(text, der):
+    digest = hashlib.sha1(der).hexdigest().upper()
+    compact = text.upper().replace(" ", "")
+    return digest in compact
 
 
-def certificate_subject(der):
-    result = subprocess.run(
-        ["openssl", "x509", "-inform", "DER", "-noout", "-subject"],
-        input=der,
+def assert_keychain_has_certificate(keychain, der):
+    identity = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning", keychain],
         capture_output=True,
+        text=True,
+        check=False,
     )
-    if result.returncode != 0:
-        return ""
-    return result.stdout.decode()
+    if identity.returncode != 0 or not identity_text_matches(identity.stdout, der):
+        raise SystemExit(
+            "The imported distribution certificate does not match "
+            f"App Store Connect certificate {DISTRIBUTION_CERTIFICATE_ID}."
+        )
+    exported = subprocess.run(
+        ["security", "find-certificate", "-a", "-p", keychain],
+        capture_output=True,
+        check=False,
+    )
+    if exported.returncode != 0 or b"BEGIN CERTIFICATE" not in exported.stdout:
+        raise SystemExit("The temporary keychain has no certificate to compare.")
+    for chunk in exported.stdout.split(b"-----END CERTIFICATE-----"):
+        start = chunk.find(b"-----BEGIN CERTIFICATE-----")
+        if start < 0:
+            continue
+        pem = chunk[start:] + b"-----END CERTIFICATE-----\n"
+        converted = subprocess.run(
+            ["openssl", "x509", "-inform", "PEM", "-outform", "DER"],
+            input=pem,
+            capture_output=True,
+            check=False,
+        )
+        if converted.returncode == 0 and converted.stdout == der:
+            return
+    raise SystemExit(
+        "The imported distribution certificate does not match "
+        f"App Store Connect certificate {DISTRIBUTION_CERTIFICATE_ID}."
+    )
 
 
-def revoke_one_automation_certificate(token):
-    """Delete the oldest distribution certificate this automation created.
+def signing_identity_setting(keychain):
+    identity = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning", keychain],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if identity.returncode != 0:
+        raise SystemExit("Could not read the temporary keychain identities.")
+    for line in identity.stdout.splitlines():
+        if "Distribution" not in line or '"' not in line:
+            continue
+        name = line.split('"', 2)[1]
+        if name.startswith("Apple Distribution"):
+            return "Apple Distribution"
+        if "Distribution" in name:
+            return "iPhone Distribution"
+    raise SystemExit(
+        "The temporary keychain has no distribution identity for code signing."
+    )
 
-    The common name is the one in archive-upload.sh. Any other certificate
-    is left in place.
-    """
+
+def list_app_store_profiles(token):
+    profiles = []
+    included = {}
     query = urllib.parse.urlencode({
-        "filter[certificateType]": CERTIFICATE_TYPE,
+        "filter[profileType]": PROFILE_TYPE,
+        "include": "bundleId,certificates",
+        "limit": "200",
+    })
+    path = "/v1/profiles?" + query
+    for _page in range(10):
+        status, body = api(token, "GET", path)
+        parsed = parse_data(status, body, "profile lookup")
+        profiles.extend(parsed.get("data") or [])
+        for item in parsed.get("included") or []:
+            included[(item.get("type"), item.get("id"))] = item
+        nxt = ((parsed.get("links") or {}).get("next")) or ""
+        if nxt.startswith(API_ROOT):
+            path = nxt[len(API_ROOT):]
+            continue
+        break
+    return profiles, included
+
+
+def profile_certificate_ids(profile):
+    data = ((profile.get("relationships") or {}).get("certificates") or {}).get("data") or []
+    return [item.get("id") for item in data if item.get("id")]
+
+
+def profile_matches_bundle(profile, bundle_resource_id, bundle_identifier, included):
+    rel = (((profile.get("relationships") or {}).get("bundleId") or {}).get("data") or {}).get("id")
+    if rel and bundle_resource_id and rel == bundle_resource_id:
+        return True
+    item = included.get(("bundleIds", rel))
+    identifier = ((item or {}).get("attributes") or {}).get("identifier")
+    return identifier == bundle_identifier
+
+
+def profile_is_current(profile, now):
+    attributes = profile.get("attributes") or {}
+    if attributes.get("profileState") not in (None, "ACTIVE"):
+        return False
+    raw = attributes.get("expirationDate")
+    if not raw:
+        return True
+    try:
+        expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return expiry > now
+
+
+def choose_profile(profiles, included, bundle_resource_id, bundle_identifier, certificate_id):
+    now = datetime.now(timezone.utc)
+    matches = []
+    for profile in profiles:
+        if certificate_id not in profile_certificate_ids(profile):
+            continue
+        if not profile_matches_bundle(profile, bundle_resource_id, bundle_identifier, included):
+            continue
+        if not profile_is_current(profile, now):
+            continue
+        matches.append(profile)
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (item.get("attributes") or {}).get("expirationDate") or "")
+    return matches[-1]
+
+
+def profile_material(token, profile):
+    content = (profile.get("attributes") or {}).get("profileContent")
+    if not content:
+        status, body = api(token, "GET", "/v1/profiles/" + urllib.parse.quote(profile["id"]))
+        parsed = parse_data(status, body, "profile")
+        profile = parsed["data"]
+        content = (profile.get("attributes") or {}).get("profileContent")
+    if not content:
+        raise SystemExit("The App Store profile had no content. No certificate was created.")
+    try:
+        raw = base64.b64decode(content)
+    except Exception:
+        raise SystemExit("The App Store profile could not be read. No certificate was created.")
+    name = (profile.get("attributes") or {}).get("name") or ""
+    if not name:
+        raise SystemExit("The App Store profile had no name. No certificate was created.")
+    return profile["id"], name, raw
+
+
+def delete_stale_named_profile(token, name, certificate_id):
+    query = urllib.parse.urlencode({
+        "filter[name]": name,
+        "filter[profileType]": PROFILE_TYPE,
+        "include": "certificates",
         "limit": "20",
     })
-    status, body = api(token, "GET", "/v1/certificates?" + query)
-    if status != 200:
-        return False
-    try:
-        items = json.loads(body).get("data") or []
-    except json.JSONDecodeError:
-        return False
-    matches = []
-    for item in items:
+    status, body = api(token, "GET", "/v1/profiles?" + query)
+    parsed = parse_data(status, body, "profile lookup")
+    for item in parsed.get("data") or []:
         attributes = item.get("attributes") or {}
-        content = attributes.get("certificateContent")
-        if not content:
+        if attributes.get("name") != name or attributes.get("profileType") != PROFILE_TYPE:
             continue
-        try:
-            der = base64.b64decode(content)
-        except Exception:
+        if (item.get("relationships") or {}).get("certificates") is None:
+            status, body = api(
+                token, "GET", "/v1/profiles/" + urllib.parse.quote(item["id"]) + "?include=certificates"
+            )
+            parsed = parse_data(status, body, "profile lookup")
+            item = parsed["data"]
+        if certificate_id in profile_certificate_ids(item):
             continue
-        if "LOJO Networks Distribution" not in certificate_subject(der):
-            continue
-        matches.append((attributes.get("expirationDate") or "", item.get("id") or ""))
-    matches = [(when, cert_id) for when, cert_id in matches if cert_id]
-    if not matches:
-        return False
-    matches.sort()
-    cert_id = matches[0][1]
-    status, _body = api(token, "DELETE", "/v1/certificates/" + urllib.parse.quote(cert_id))
-    if status not in (204, 404):
-        return False
-    print("Revoked one older LOJO Networks Distribution certificate to make room.", flush=True)
-    return True
+        delete_profile(token, item["id"])
 
 
 def create_profile(token, name, bundle_resource_id, certificate_id):
@@ -378,11 +508,43 @@ def create_profile(token, name, bundle_resource_id, certificate_id):
             }
         },
     )
+    if status == 409:
+        return None
     parsed = parse_data(status, body, "profile")
-    content = parsed["data"].get("attributes", {}).get("profileContent")
-    if not content:
-        stop_api(status, body, "profile")
-    return parsed["data"]["id"], base64.b64decode(content)
+    profile = parsed["data"]
+    if certificate_id not in profile_certificate_ids(profile):
+        raise SystemExit(
+            "The new App Store profile is not tied to "
+            f"{DISTRIBUTION_CERTIFICATE_ID}. No certificate was created."
+        )
+    return profile
+
+
+def ensure_profile(token, bundle_id, bundle_resource_id, certificate_id, profiles, included):
+    chosen = choose_profile(
+        profiles, included, bundle_resource_id, bundle_id, certificate_id
+    )
+    if chosen is not None:
+        print(f"Using the App Store profile for {bundle_id}.", flush=True)
+        return profile_material(token, chosen)
+    name = preferred_profile_name(bundle_id)
+    print(f"Creating an App Store profile for {bundle_id}.", flush=True)
+    created = create_profile(token, name, bundle_resource_id, certificate_id)
+    if created is None:
+        profiles, included = list_app_store_profiles(token)
+        chosen = choose_profile(
+            profiles, included, bundle_resource_id, bundle_id, certificate_id
+        )
+        if chosen is not None:
+            print(f"Using the App Store profile for {bundle_id}.", flush=True)
+            return profile_material(token, chosen)
+        delete_stale_named_profile(token, name, certificate_id)
+        created = create_profile(token, name, bundle_resource_id, certificate_id)
+    if created is None:
+        raise SystemExit(
+            f"Could not create an App Store profile for {bundle_id}. No certificate was created."
+        )
+    return profile_material(token, created)
 
 
 def install_profile(raw, profile_id, directory):
@@ -400,7 +562,7 @@ def bundle_in_block(text, bundle_id):
     )
 
 
-def patch_pbxproj(text, team, keychain, profiles):
+def patch_pbxproj(text, team, keychain, profiles, identity="Apple Distribution"):
     lines = text.splitlines(keepends=True)
     output = []
     index = 0
@@ -425,11 +587,11 @@ def patch_pbxproj(text, team, keychain, profiles):
         if matched is None:
             output.extend(block)
             continue
-        output.extend(rewrite_settings(block, team, keychain, matched))
+        output.extend(rewrite_settings(block, team, keychain, matched, identity))
     return "".join(output)
 
 
-def rewrite_settings(block, team, keychain, profile_name):
+def rewrite_settings(block, team, keychain, profile_name, identity="Apple Distribution"):
     indent = "\t\t\t\t"
     for line in block:
         stripped = line.lstrip()
@@ -445,7 +607,8 @@ def rewrite_settings(block, team, keychain, profile_name):
     flag = f"--keychain {keychain}"
     settings = [
         f"{indent}CODE_SIGN_STYLE = Manual;\n",
-        f'{indent}CODE_SIGN_IDENTITY = "Apple Distribution";\n',
+        f"{indent}CODE_SIGNING_ALLOWED = YES;\n",
+        f'{indent}CODE_SIGN_IDENTITY = "{identity}";\n',
         f"{indent}DEVELOPMENT_TEAM = {team};\n",
         f'{indent}PROVISIONING_PROFILE_SPECIFIER = "{profile_name}";\n',
         f'{indent}OTHER_CODE_SIGN_FLAGS = "{flag}";\n',
@@ -455,11 +618,11 @@ def rewrite_settings(block, team, keychain, profile_name):
     return kept
 
 
-def write_export_options(path, team, profiles):
+def write_export_options(path, team, profiles, identity="Apple Distribution"):
     payload = {
         "method": "app-store-connect",
         "signingStyle": "manual",
-        "signingCertificate": "Apple Distribution",
+        "signingCertificate": identity,
         "teamID": team,
         "destination": "upload",
         "uploadSymbols": True,
@@ -471,140 +634,108 @@ def write_export_options(path, team, profiles):
         plistlib.dump(payload, handle)
 
 
-def write_manifest(path, certificate_id, certificate_path, profiles):
-    payload = {
-        "certificateId": certificate_id,
-        "certificatePath": str(certificate_path),
-        "profiles": profiles,
-    }
-    Path(path).write_text(json.dumps(payload))
-    os.chmod(path, 0o600)
+def extract_braces(text, open_index):
+    depth = 0
+    index = open_index
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_index + 1:index]
+        elif char == '"':
+            index += 1
+            while index < len(text) and text[index] != '"':
+                if text[index] == "\\":
+                    index += 1
+                index += 1
+        index += 1
+    return ""
+
+
+def pbx_objects(text):
+    objects = {}
+    pattern = re.compile(r"(?m)^[ \t]*([A-Fa-f0-9]{24})(?: /\* [^*]* \*/)? = \{")
+    for match in pattern.finditer(text):
+        objects[match.group(1)] = extract_braces(text, match.end() - 1)
+    return objects
+
+
+def pbx_field(body, name):
+    match = re.search(rf"(?m)^[ \t]*{re.escape(name)} = ([^;]+);", body)
+    if not match:
+        return None
+    value = match.group(1).strip().strip('"')
+    return value.split("/*", 1)[0].strip()
+
+
+def distribution_bundles(text):
+    """App and app-extension bundle ids. Test bundles are left unsigned by this."""
+    objects = pbx_objects(text)
+    found = []
+    seen = set()
+    for body in objects.values():
+        if "isa = PBXNativeTarget;" not in body:
+            continue
+        product = pbx_field(body, "productType")
+        if product not in DISTRIBUTION_PRODUCT_TYPES:
+            continue
+        list_id = pbx_field(body, "buildConfigurationList")
+        list_body = objects.get(list_id or "", "")
+        configs = re.search(r"buildConfigurations = \((.*?)\);", list_body, re.S)
+        config_ids = re.findall(r"[A-Fa-f0-9]{24}", configs.group(1) if configs else "")
+        for config_id in config_ids:
+            bundle_id = pbx_field(objects.get(config_id, ""), "PRODUCT_BUNDLE_IDENTIFIER")
+            if not bundle_id or bundle_id in seen:
+                continue
+            if bundle_id.endswith(".tests") or bundle_id.endswith(".uitests"):
+                continue
+            seen.add(bundle_id)
+            found.append(bundle_id)
+    found.sort(key=lambda item: (item != APP_BUNDLE_ID, item))
+    return found
 
 
 def prepare(argv):
-    certificate_out = Path(argv["certificate_out"])
-    manifest_path = Path(argv["manifest"])
     profiles_dir = Path(argv["profiles_dir"]).expanduser()
-    csr_text = Path(argv["csr"]).read_text()
-    if "-----BEGIN CERTIFICATE REQUEST-----" not in csr_text:
-        raise SystemExit("The distribution CSR was not produced.")
-    print("Creating a new iOS Distribution certificate.", flush=True)
-    token = jwt_from_env()
-    certificate_id, certificate_der = create_certificate(token, csr_text)
-    certificate_out.write_bytes(certificate_der)
-    os.chmod(certificate_out, 0o600)
-    # Record the id at once so cleanup can revoke it even if a later step fails.
-    write_manifest(manifest_path, certificate_id, certificate_out, [])
-    print("Created a new iOS Distribution certificate. Existing certificates were not revoked.", flush=True)
-    installed = []
-    try:
-        for bundle_id, profile_name in TARGETS:
-            print(f"Installing an App Store profile for {bundle_id}.", flush=True)
-            resource_id = ensure_bundle_id(token, bundle_id, BUNDLE_NAMES[bundle_id])
-            delete_named_profiles(token, profile_name)
-            profile_id, raw = create_profile(token, profile_name, resource_id, certificate_id)
-            path = install_profile(raw, profile_id, profiles_dir)
-            installed.append(
-                {
-                    "id": profile_id,
-                    "name": profile_name,
-                    "bundleId": bundle_id,
-                    "path": str(path),
-                }
-            )
-            write_manifest(manifest_path, certificate_id, certificate_out, installed)
-    except SystemExit:
-        write_manifest(manifest_path, certificate_id, certificate_out, installed)
-        raise
     project = Path(argv["pbxproj"])
-    patched = patch_pbxproj(project.read_text(), argv["team"], argv["keychain"], TARGETS)
-    if patched.count('CODE_SIGN_STYLE = Manual;') < 1:
-        raise SystemExit("Could not set manual signing on the app target. Nothing was revoked.")
-    if "Apple Distribution" not in patched:
-        raise SystemExit("Could not set the Apple Distribution identity. Nothing was revoked.")
-    project.write_text(patched)
-    write_export_options(Path(argv["export_plist"]), argv["team"], TARGETS)
-    write_manifest(manifest_path, certificate_id, certificate_out, installed)
-
-
-def delete_profiles():
-    """Delete the profiles listed in the run manifest. Returns True if all went well."""
-    manifest_path = Path(os.environ["SIGNING_MANIFEST"])
-    if not manifest_path.is_file():
-        return True
-    manifest = json.loads(manifest_path.read_text())
-    token = jwt_from_env()
-    ok = True
-    for profile in manifest.get("profiles", []):
-        profile_id = profile.get("id")
-        if profile_id:
-            status, body = api(token, "DELETE", "/v1/profiles/" + urllib.parse.quote(profile_id))
-            if status not in (204, 404):
-                text = body.strip() or f"HTTP {status}"
-                sys.stderr.write(text + "\n")
-                sys.stderr.write("Could not delete an App Store profile created by this run.\n")
-                ok = False
-        path = profile.get("path")
-        if path:
-            Path(path).unlink(missing_ok=True)
-    return ok
-
-
-def revoke_own_certificate(token, certificate_id, certificate_path):
-    """Revoke (DELETE) the certificate this run created. Never touches any other id.
-
-    When the local certificate file is still there, the certificate the API
-    returns for that id must be byte-identical to it. Otherwise nothing is
-    revoked.
-    """
-    if not certificate_id:
-        return True
-    quoted = urllib.parse.quote(certificate_id)
-    if certificate_path and Path(certificate_path).is_file():
-        status, body = api(token, "GET", "/v1/certificates/" + quoted)
-        if status == 404:
-            return True
-        try:
-            content = json.loads(body)["data"]["attributes"]["certificateContent"]
-            same = base64.b64decode(content) == Path(certificate_path).read_bytes()
-        except Exception:
-            same = False
-        if status != 200 or not same:
-            sys.stderr.write(
-                "The certificate with the recorded id does not match the one this run created. "
-                "Not revoking it.\n"
-            )
-            return False
-    status, body = api(token, "DELETE", "/v1/certificates/" + quoted)
-    if status in (204, 404):
-        print("Revoked the distribution certificate created by this run.", flush=True)
-        return True
-    sys.stderr.write((body.strip() or f"HTTP {status}") + "\n")
-    sys.stderr.write("Could not revoke the distribution certificate created by this run.\n")
-    return False
-
-
-def cleanup():
-    """Always-run cleanup: delete this run's profiles, then revoke this run's certificate."""
-    manifest_path = Path(os.environ["SIGNING_MANIFEST"])
-    if not manifest_path.is_file():
-        return
-    manifest = json.loads(manifest_path.read_text())
-    profiles_ok = delete_profiles()
-    if os.environ.get("SKIP_CERTIFICATE_REVOKE") == "1":
-        print(
-            "Left this run's distribution certificate in place so processing can finish.",
-            flush=True,
+    text = project.read_text()
+    bundles = distribution_bundles(text)
+    if APP_BUNDLE_ID not in bundles:
+        raise SystemExit(
+            f"Could not find {APP_BUNDLE_ID} in the Xcode project. No certificate was created."
         )
-        if not profiles_ok:
-            raise SystemExit(1)
-        return
     token = jwt_from_env()
-    certificate_ok = revoke_own_certificate(
-        token, manifest.get("certificateId"), manifest.get("certificatePath")
+    certificate_id, certificate_der = fetch_distribution_certificate(token)
+    if certificate_id != DISTRIBUTION_CERTIFICATE_ID:
+        raise SystemExit(
+            "Refusing to sign with a certificate other than "
+            f"{DISTRIBUTION_CERTIFICATE_ID}. No certificate was created."
+        )
+    assert_keychain_has_certificate(argv["keychain"], certificate_der)
+    identity = signing_identity_setting(argv["keychain"])
+    profiles, included = list_app_store_profiles(token)
+    installed = []
+    for bundle_id in bundles:
+        resource_id = ensure_bundle_id(token, bundle_id, bundle_display_name(bundle_id))
+        profile_id, profile_name, raw = ensure_profile(
+            token, bundle_id, resource_id, certificate_id, profiles, included
+        )
+        install_profile(raw, profile_id, profiles_dir)
+        installed.append((bundle_id, profile_name))
+    patched = patch_pbxproj(text, argv["team"], argv["keychain"], installed, identity)
+    if patched.count("CODE_SIGN_STYLE = Manual;") < 1:
+        raise SystemExit("Could not set manual signing on the app target. No certificate was created.")
+    if identity not in patched:
+        raise SystemExit("Could not set the distribution identity. No certificate was created.")
+    project.write_text(patched)
+    write_export_options(Path(argv["export_plist"]), argv["team"], installed, identity)
+    print(
+        f"Manual signing uses the shared certificate {DISTRIBUTION_CERTIFICATE_ID}.",
+        flush=True,
     )
-    if not (profiles_ok and certificate_ok):
-        raise SystemExit(1)
 
 
 def self_test():
@@ -613,69 +744,10 @@ def self_test():
     pbxproj_roundtrip()
     export_roundtrip()
     forbidden_roundtrip()
-    cleanup_roundtrip()
-    limit_retry_roundtrip()
+    bundles_roundtrip()
+    profile_roundtrip()
+    no_certificate_minting()
     print("asc signing ok")
-
-
-def limit_retry_roundtrip():
-    with tempfile.TemporaryDirectory() as tmp:
-        ours = Path(tmp) / "ours.der"
-        other = Path(tmp) / "other.der"
-        older = Path(tmp) / "older.der"
-        for path, name in (
-            (ours, "LOJO Networks Distribution"),
-            (older, "LOJO Networks Distribution"),
-            (other, "Someone Else"),
-        ):
-            subprocess.run(
-                [
-                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                    "-keyout", str(Path(tmp) / (path.name + ".key")),
-                    "-out", str(path), "-outform", "DER",
-                    "-subj", f"/CN={name}", "-days", "30",
-                ],
-                check=True,
-                capture_output=True,
-            )
-        ours_b64 = base64.b64encode(ours.read_bytes()).decode()
-        older_b64 = base64.b64encode(older.read_bytes()).decode()
-        other_b64 = base64.b64encode(other.read_bytes()).decode()
-    calls = []
-
-    def fake_api(token, method, path, payload=None):
-        calls.append((method, path))
-        if method == "POST" and path == "/v1/certificates":
-            if not any(item[0] == "DELETE" for item in calls):
-                return 409, "You have already reached the maximum number of certificates of this type."
-            return 201, json.dumps({
-                "data": {
-                    "id": "NEW",
-                    "attributes": {"certificateContent": base64.b64encode(b"new-der").decode()},
-                }
-            })
-        if method == "GET" and path.startswith("/v1/certificates?"):
-            return 200, json.dumps({"data": [
-                {"id": "OTHER", "attributes": {"expirationDate": "2020-01-01T00:00:00Z", "certificateContent": other_b64}},
-                {"id": "OLDER", "attributes": {"expirationDate": "2021-01-01T00:00:00Z", "certificateContent": older_b64}},
-                {"id": "OURS", "attributes": {"expirationDate": "2022-01-01T00:00:00Z", "certificateContent": ours_b64}},
-            ]})
-        if method == "DELETE":
-            return 204, ""
-        return 404, "{}"
-
-    real_api = globals()["api"]
-    globals()["api"] = fake_api
-    try:
-        cert_id, der = create_certificate("token", "csr")
-    finally:
-        globals()["api"] = real_api
-    if cert_id != "NEW" or der != b"new-der":
-        raise SystemExit("certificate limit retry did not create a replacement")
-    if ("DELETE", "/v1/certificates/OLDER") not in calls:
-        raise SystemExit("certificate limit retry did not revoke the oldest automation certificate")
-    if ("DELETE", "/v1/certificates/OTHER") in calls or ("DELETE", "/v1/certificates/OURS") in calls:
-        raise SystemExit("certificate limit retry revoked the wrong certificate")
 
 
 def der_roundtrip():
@@ -832,80 +904,195 @@ def forbidden_roundtrip():
         raise SystemExit("certificate limit was not reported clearly")
 
 
-def cleanup_roundtrip():
-    """Cleanup deletes the profiles and then only the recorded certificate id."""
+def bundles_roundtrip():
+    fixture = """
+AABBCCDDEEFF001122334455 /* Debug */ = {
+	isa = XCBuildConfiguration;
+	buildSettings = {
+		PRODUCT_BUNDLE_IDENTIFIER = com.lojo.PrivateNetworks;
+	};
+	name = Debug;
+};
+11223344556677889900AABB /* Release */ = {
+	isa = XCBuildConfiguration;
+	buildSettings = {
+		PRODUCT_BUNDLE_IDENTIFIER = com.lojo.PrivateNetworks.Widget;
+	};
+	name = Release;
+};
+99AABBCCDDEEFF0011223344 /* Debug */ = {
+	isa = XCBuildConfiguration;
+	buildSettings = {
+		PRODUCT_BUNDLE_IDENTIFIER = com.lojo.PrivateNetworks.tests;
+	};
+	name = Debug;
+};
+5566778899AABBCCDDEEFF00 /* Build configuration list for PBXNativeTarget "LojoNetworks" */ = {
+	isa = XCConfigurationList;
+	buildConfigurations = (
+		AABBCCDDEEFF001122334455 /* Debug */,
+	);
+	defaultConfigurationIsVisible = 0;
+};
+66778899AABBCCDDEEFF0011 /* Build configuration list for PBXNativeTarget "Widget" */ = {
+	isa = XCConfigurationList;
+	buildConfigurations = (
+		11223344556677889900AABB /* Release */,
+	);
+};
+778899AABBCCDDEEFF001122 /* Build configuration list for PBXNativeTarget "Tests" */ = {
+	isa = XCConfigurationList;
+	buildConfigurations = (
+		99AABBCCDDEEFF0011223344 /* Debug */,
+	);
+};
+DEADBEEFDEADBEEFDEADBEEF /* LojoNetworks */ = {
+	isa = PBXNativeTarget;
+	buildConfigurationList = 5566778899AABBCCDDEEFF00 /* Build configuration list for PBXNativeTarget "LojoNetworks" */;
+	name = LojoNetworks;
+	productType = "com.apple.product-type.application";
+};
+CAFEBABECAFEBABECAFEBABE /* Widget */ = {
+	isa = PBXNativeTarget;
+	buildConfigurationList = 66778899AABBCCDDEEFF0011;
+	name = Widget;
+	productType = "com.apple.product-type.app-extension";
+};
+FEEDFACEFEEDFACEFEEDFACE /* Tests */ = {
+	isa = PBXNativeTarget;
+	buildConfigurationList = 778899AABBCCDDEEFF001122;
+	name = Tests;
+	productType = "com.apple.product-type.bundle.unit-test";
+};
+"""
+    bundles = distribution_bundles(fixture)
+    if bundles != [APP_BUNDLE_ID, "com.lojo.PrivateNetworks.Widget"]:
+        raise SystemExit("bundle discovery missed the app or an extension: " + repr(bundles))
+
+
+def profile_roundtrip():
+    """Fetch a profile tied to the shared certificate, or create one. Never mint a certificate."""
+    der = b"shared-cert"
+    content = base64.b64encode(der).decode()
+    profile_body = base64.b64encode(b"profile-bytes").decode()
     calls = []
-    real_api, real_jwt = globals()["api"], globals()["jwt_from_env"]
-    with tempfile.TemporaryDirectory() as tmp:
-        cert = Path(tmp) / "c.cer"
-        cert.write_bytes(b"der-bytes")
-        profile_file = Path(tmp) / "p.mobileprovision"
-        profile_file.write_bytes(b"x")
-        manifest = Path(tmp) / "m.json"
-        write_manifest(
-            manifest,
-            "CERT1",
-            cert,
-            [{"id": "PROF1", "name": "n", "bundleId": "b", "path": str(profile_file)}],
+
+    def certificate_payload():
+        return {
+            "data": {
+                "id": DISTRIBUTION_CERTIFICATE_ID,
+                "attributes": {
+                    "certificateType": "IOS_DISTRIBUTION",
+                    "certificateContent": content,
+                },
+            }
+        }
+
+    def profile_item(profile_id, bundle_resource_id):
+        return {
+            "type": "profiles",
+            "id": profile_id,
+            "attributes": {
+                "name": "LOJO Networks App Store",
+                "profileType": PROFILE_TYPE,
+                "profileState": "ACTIVE",
+                "expirationDate": "2099-01-01T00:00:00Z",
+                "profileContent": profile_body,
+            },
+            "relationships": {
+                "bundleId": {"data": {"type": "bundleIds", "id": bundle_resource_id}},
+                "certificates": {
+                    "data": [{"type": "certificates", "id": DISTRIBUTION_CERTIFICATE_ID}]
+                },
+            },
+        }
+
+    def fake_api(token, method, path, payload=None):
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/v1/certificates/" + DISTRIBUTION_CERTIFICATE_ID:
+            return 200, json.dumps(certificate_payload())
+        if method == "GET" and path.startswith("/v1/bundleIds?"):
+            return 200, json.dumps({
+                "data": [{
+                    "id": "BUNDLE",
+                    "attributes": {"identifier": APP_BUNDLE_ID},
+                }]
+            })
+        if method == "GET" and path.startswith("/v1/profiles"):
+            if calls and any(item[0] == "POST" and item[1] == "/v1/profiles" for item in calls):
+                return 200, json.dumps({"data": []})
+            return 200, json.dumps({
+                "data": [profile_item("PROF1", "BUNDLE")],
+                "included": [{
+                    "type": "bundleIds",
+                    "id": "BUNDLE",
+                    "attributes": {"identifier": APP_BUNDLE_ID},
+                }],
+            })
+        if method == "POST" and path == "/v1/profiles":
+            return 201, json.dumps({"data": profile_item("PROF2", "BUNDLE")})
+        return 404, "{}"
+
+    real_api = globals()["api"]
+    globals()["api"] = fake_api
+    try:
+        cert_id, fetched = fetch_distribution_certificate("token")
+        if cert_id != DISTRIBUTION_CERTIFICATE_ID or fetched != der:
+            raise SystemExit("shared certificate lookup failed")
+        profiles, included = list_app_store_profiles("token")
+        profile_id, name, raw = ensure_profile(
+            "token", APP_BUNDLE_ID, "BUNDLE", DISTRIBUTION_CERTIFICATE_ID, profiles, included
         )
+        if profile_id != "PROF1" or name != "LOJO Networks App Store" or raw != b"profile-bytes":
+            raise SystemExit("did not reuse the profile tied to the shared certificate")
+        if any(method == "POST" and path == "/v1/certificates" for method, path, _payload in calls):
+            raise SystemExit("profile fetch created a certificate")
+        if any(method == "DELETE" and "/v1/certificates" in path for method, path, _payload in calls):
+            raise SystemExit("profile fetch deleted a certificate")
+        calls.clear()
+        profile_id, name, raw = ensure_profile(
+            "token", APP_BUNDLE_ID, "BUNDLE", DISTRIBUTION_CERTIFICATE_ID, [], {}
+        )
+        if profile_id != "PROF2":
+            raise SystemExit("did not create a profile when none matched the shared certificate")
+        created = [payload for method, path, payload in calls if method == "POST" and path == "/v1/profiles"]
+        if len(created) != 1:
+            raise SystemExit("profile create was not a single request")
+        certs = created[0]["data"]["relationships"]["certificates"]["data"]
+        if certs != [{"type": "certificates", "id": DISTRIBUTION_CERTIFICATE_ID}]:
+            raise SystemExit("created profile was not tied to the shared certificate")
+        if any(method == "POST" and path == "/v1/certificates" for method, path, _payload in calls):
+            raise SystemExit("profile create minted a certificate")
+    finally:
+        globals()["api"] = real_api
+    sample = "  1) " + hashlib.sha1(der).hexdigest().upper() + ' "Apple Distribution: Example (TEAM)"'
+    if not identity_text_matches(sample, der):
+        raise SystemExit("identity hash did not match the shared certificate")
+    if identity_text_matches(sample, b"other"):
+        raise SystemExit("identity hash matched a different certificate")
 
-        def fake_api(token, method, path, payload=None):
-            calls.append((method, path))
-            if method == "GET":
-                return 200, json.dumps(
-                    {"data": {"attributes": {"certificateContent": base64.b64encode(b"der-bytes").decode()}}}
-                )
-            return 204, ""
 
-        globals()["api"] = fake_api
-        globals()["jwt_from_env"] = lambda: "token"
-        os.environ["SIGNING_MANIFEST"] = str(manifest)
-        try:
-            cleanup()
-            if calls != [
-                ("DELETE", "/v1/profiles/PROF1"),
-                ("GET", "/v1/certificates/CERT1"),
-                ("DELETE", "/v1/certificates/CERT1"),
-            ]:
-                raise SystemExit("cleanup made unexpected API calls: " + repr(calls))
-            if profile_file.exists():
-                raise SystemExit("cleanup left the profile file behind")
-            # A certificate that does not match the local file is never revoked.
-            calls.clear()
-            cert.write_bytes(b"other")
-            held = sys.stderr
-            sys.stderr = io.StringIO()
-            try:
-                cleanup()
-            except SystemExit:
-                pass
-            else:
-                raise SystemExit("cleanup accepted a mismatched certificate")
-            finally:
-                sys.stderr = held
-            if ("DELETE", "/v1/certificates/CERT1") in calls:
-                raise SystemExit("cleanup revoked a certificate it could not verify")
-        finally:
-            globals()["api"], globals()["jwt_from_env"] = real_api, real_jwt
-            os.environ.pop("SIGNING_MANIFEST", None)
+def no_certificate_minting():
+    source = Path(__file__).read_text()
+    blocked = (
+        "def " + "create_certificate",
+        "def " + "revoke_",
+        "BEGIN CERTIFICATE " + "REQUEST",
+        '"POST", ' + '"/v1/certificates"',
+        '"DELETE", ' + '"/v1/certificates',
+    )
+    for needle in blocked:
+        if needle in source:
+            raise SystemExit("signing script still contains certificate creation")
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "cleanup":
-        cleanup()
-        return
-    if len(sys.argv) > 1 and sys.argv[1] == "delete-profiles":
-        delete_profiles()
-        return
     if len(sys.argv) > 1 and sys.argv[1] == "prepare":
         required = (
-            "certificate_out",
-            "manifest",
             "profiles_dir",
-            "csr",
             "team",
             "keychain",
             "pbxproj",
@@ -925,7 +1112,7 @@ def main():
             raise SystemExit("Missing signing arguments.")
         prepare(values)
         return
-    raise SystemExit("Usage: asc_signing.py --self-test | prepare | cleanup | delete-profiles")
+    raise SystemExit("Usage: asc_signing.py --self-test | prepare")
 
 
 if __name__ == "__main__":

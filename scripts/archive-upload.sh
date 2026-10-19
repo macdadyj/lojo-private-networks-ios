@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Archive with manual distribution signing and upload to TestFlight.
-# The App Store Connect API key creates a new iOS Distribution certificate
-# and an App Store profile. Existing certificates are never touched. On exit,
-# success or failure, it deletes the profile it created and revokes only the
-# distribution certificate it created in this run, so certificates never pile up.
-# Does not print secret values. Deletes the API key, keychain, and profile on exit.
+# Imports the shared iOS Distribution certificate from DIST_CERT_P12 into a
+# temporary keychain, then fetches or creates App Store profiles tied to
+# certificate VJ5MXTN7UT. Does not create or delete distribution certificates.
+# Does not print secret values. The workflow deletes the keychain in an always() step.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -61,6 +60,195 @@ destination.write_bytes(data)
 PY
 }
 
+signing_dir() {
+  local root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+  printf '%s/lojo-dist-signing' "${root%/}"
+}
+
+signing_keychain() {
+  printf '%s/signing.keychain-db' "$(signing_dir)"
+}
+
+# Writes a PKCS#12 file from DIST_CERT_P12 (base64, whitespace ignored).
+# Error text never includes the secret.
+decode_p12() {
+  python3 - <<'PY'
+import base64
+import os
+import sys
+from pathlib import Path
+
+raw = os.environ.get("DIST_CERT_P12", "")
+compact = "".join(raw.split())
+destination = Path(os.environ["P12_PATH"])
+if not compact:
+    sys.exit("DIST_CERT_P12 is empty.")
+pad = (-len(compact)) % 4
+try:
+    data = base64.b64decode(compact + ("=" * pad), validate=True)
+except Exception:
+    sys.exit("DIST_CERT_P12 is not valid base64.")
+if not data or data[0] != 0x30:
+    sys.exit("DIST_CERT_P12 did not decode to a PKCS#12 file.")
+destination.write_bytes(data)
+PY
+}
+
+add_keychain_to_search_list() {
+  python3 - "$1" <<'PY'
+import subprocess
+import sys
+
+keychain = sys.argv[1]
+listed = subprocess.run(
+    ["security", "list-keychains", "-d", "user"],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+paths = [keychain]
+for line in listed.stdout.splitlines():
+    item = line.strip().strip('"')
+    if item and item != keychain:
+        paths.append(item)
+subprocess.run(
+    ["security", "list-keychains", "-d", "user", "-s", *paths],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    check=True,
+)
+PY
+}
+
+import_dist_keychain() {
+  local dir keychain passfile p12
+  if [[ -z "${DIST_CERT_P12:-}" || -z "${DIST_CERT_PASSWORD:-}" ]]; then
+    echo "Missing GitHub secret DIST_CERT_P12 or DIST_CERT_PASSWORD." >&2
+    exit 1
+  fi
+  dir="$(signing_dir)"
+  rm -rf "${dir}"
+  mkdir -p "${dir}"
+  chmod 700 "${dir}"
+  keychain="$(signing_keychain)"
+  passfile="${dir}/keychain.pass"
+  p12="${dir}/distribution.p12"
+  P12_PATH="${p12}" decode_p12
+  chmod 600 "${p12}"
+  openssl rand -base64 32 | tr -d '\n' > "${passfile}"
+  chmod 600 "${passfile}"
+  python3 - "$keychain" "$passfile" "$p12" <<'PY'
+import os
+import pathlib
+import subprocess
+import sys
+
+keychain, passfile, p12 = sys.argv[1:]
+keychain_password = pathlib.Path(passfile).read_text()
+certificate_password = os.environ["DIST_CERT_PASSWORD"]
+steps = (
+    ["security", "create-keychain", "-p", keychain_password, keychain],
+    ["security", "set-keychain-settings", "-lut", "21600", keychain],
+    ["security", "unlock-keychain", "-p", keychain_password, keychain],
+    [
+        "security", "import", p12,
+        "-k", keychain,
+        "-P", certificate_password,
+        "-f", "pkcs12",
+        "-A",
+        "-T", "/usr/bin/codesign",
+        "-T", "/usr/bin/security",
+    ],
+    [
+        "security", "set-key-partition-list",
+        "-S", "apple-tool:,apple:,codesign:",
+        "-s",
+        "-k", keychain_password,
+        keychain,
+    ],
+)
+for command in steps:
+    result = subprocess.run(command, capture_output=True)
+    if result.returncode != 0:
+        sys.stderr.write("Could not import the shared distribution certificate into the temporary keychain.\n")
+        sys.exit(result.returncode or 1)
+PY
+  add_keychain_to_search_list "${keychain}"
+  security default-keychain -s "${keychain}" >/dev/null
+  rm -f "${p12}"
+  if ! security find-identity -p codesigning "${keychain}" 2>/dev/null | grep -q "Distribution"; then
+    echo "The shared distribution certificate did not import into the temporary keychain." >&2
+    exit 1
+  fi
+  echo "Imported the shared distribution certificate into a temporary keychain."
+}
+
+unlock_dist_keychain() {
+  local dir keychain passfile
+  dir="$(signing_dir)"
+  keychain="$(signing_keychain)"
+  passfile="${dir}/keychain.pass"
+  if [[ ! -e "${keychain}" || ! -f "${passfile}" ]]; then
+    echo "The shared distribution certificate is not in a temporary keychain." >&2
+    echo "Run archive-upload.sh --import-keychain before archiving." >&2
+    exit 1
+  fi
+  python3 - "$keychain" "$passfile" <<'PY'
+import pathlib
+import subprocess
+import sys
+
+keychain, passfile = sys.argv[1:]
+password = pathlib.Path(passfile).read_text()
+result = subprocess.run(
+    ["security", "unlock-keychain", "-p", password, keychain],
+    capture_output=True,
+)
+if result.returncode != 0:
+    sys.stderr.write("Could not unlock the temporary signing keychain.\n")
+    sys.exit(result.returncode or 1)
+PY
+  add_keychain_to_search_list "${keychain}"
+  security default-keychain -s "${keychain}" >/dev/null
+}
+
+delete_dist_keychain() {
+  local dir keychain
+  dir="$(signing_dir)"
+  keychain="$(signing_keychain)"
+  if command -v security >/dev/null 2>&1; then
+    security delete-keychain "${keychain}" >/dev/null 2>&1 || true
+    security default-keychain -s login.keychain-db >/dev/null 2>&1 || true
+    python3 - "$keychain" <<'PY' || true
+import subprocess
+import sys
+
+keychain = sys.argv[1]
+listed = subprocess.run(
+    ["security", "list-keychains", "-d", "user"],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+paths = []
+for line in listed.stdout.splitlines():
+    item = line.strip().strip('"')
+    if item and item != keychain:
+        paths.append(item)
+if not paths:
+    paths = ["login.keychain-db"]
+subprocess.run(
+    ["security", "list-keychains", "-d", "user", "-s", *paths],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    check=False,
+)
+PY
+  fi
+  rm -rf "${dir}"
+  echo "Deleted the temporary signing keychain."
+}
+
 check_encryption() {
   local plist="${APP}/Info.plist"
   if ! awk '
@@ -104,6 +292,26 @@ PY
     exit 1
   fi
   echo "asc key decode rejected invalid input"
+  payload=$'\x30\x82\x01\x02pkcs12-fixture'
+  b64="$(printf '%s' "${payload}" | base64 | fold -w 16)"
+  P12_PATH="${tmp}/fixture.p12" DIST_CERT_P12="${b64}" decode_p12
+  python3 - "${tmp}/fixture.p12" <<'PY'
+import sys
+from pathlib import Path
+body = Path(sys.argv[1]).read_bytes()
+if not body.startswith(b"\x30\x82"):
+    sys.exit("self-test failed: p12 decode")
+print("dist cert decode ok")
+PY
+  if P12_PATH="${tmp}/bad.p12" DIST_CERT_P12="not a certificate" decode_p12 2>"${tmp}/p12err"; then
+    echo "self-test failed: invalid p12 was accepted" >&2
+    exit 1
+  fi
+  if grep -q "not a certificate" "${tmp}/p12err"; then
+    echo "self-test failed: p12 error text included the secret" >&2
+    exit 1
+  fi
+  echo "dist cert decode rejected invalid input"
   rm -rf "${tmp}"
   trap - EXIT
   check_encryption
@@ -112,8 +320,33 @@ PY
   [[ "$(compute_build_number 5 3)" == "5.3" ]] || { echo "self-test failed: build number for a re-run" >&2; exit 1; }
   [[ "$(compute_build_number "" 1)" == "1" ]] || { echo "self-test failed: build number without a run" >&2; exit 1; }
   echo "build number ok: run 1 -> 1, run 5 attempt 3 -> 5.3"
+  python3 - "$0" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+needles = (
+    "openssl gen" + "rsa",
+    "BEGIN CERTIFICATE " + "REQUEST",
+    "allowProvisioning" + "Updates",
+    "fast" + "lane",
+)
+for needle in needles:
+    if needle in text:
+        sys.exit("self-test failed: certificate creation is still present")
+print("archive script does not mint certificates")
+PY
   python3 "${SCRIPT_DIR}/asc_signing.py" --self-test
   python3 "${SCRIPT_DIR}/asc_testflight.py" --self-test
+  exit 0
+fi
+
+if [[ "${1:-}" == "--import-keychain" ]]; then
+  import_dist_keychain
+  exit 0
+fi
+
+if [[ "${1:-}" == "--delete-keychain" ]]; then
+  delete_dist_keychain
   exit 0
 fi
 
@@ -137,21 +370,10 @@ TEAM="${DEVELOPMENT_TEAM}"
 BUILD_NUMBER="$(compute_build_number "${GITHUB_RUN_NUMBER:-1}" "${GITHUB_RUN_ATTEMPT:-1}")"
 echo "Archive build number ${BUILD_NUMBER} for com.lojo.PrivateNetworks."
 WORKDIR="$(mktemp -d)"
-KEYCHAIN="${WORKDIR}/signing.keychain-db"
-MANIFEST="${WORKDIR}/signing-manifest.json"
+KEYCHAIN="$(signing_keychain)"
 KEY_PATH="${WORKDIR}/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-KEYCHAIN_READY=0
 cleanup() {
   local status=$?
-  if [[ "${KEYCHAIN_READY}" == "1" ]]; then
-    security delete-keychain "${KEYCHAIN}" >/dev/null 2>&1 || true
-    security default-keychain -s login.keychain-db >/dev/null 2>&1 || true
-    security list-keychains -d user -s login.keychain-db >/dev/null 2>&1 || true
-  fi
-  if [[ -f "${MANIFEST}" && -f "${KEY_PATH}" ]]; then
-    SIGNING_MANIFEST="${MANIFEST}" python3 "${SCRIPT_DIR}/asc_signing.py" cleanup || \
-      echo "Warning: could not fully clean up App Store Connect signing assets for this run." >&2
-  fi
   rm -rf "${WORKDIR}"
   exit "${status}"
 }
@@ -180,60 +402,17 @@ if [[ ! -d "${APP}/LojoNetworks.xcodeproj" ]]; then
   bash "${SCRIPT_DIR}/ios-prepare.sh"
 fi
 check_encryption
-
-openssl genrsa -out "${WORKDIR}/distribution.key" 2048
-cat > "${WORKDIR}/openssl.cnf" <<'EOF'
-[req]
-distinguished_name = dn
-prompt = no
-[dn]
-CN = LOJO Networks Distribution
-EOF
-openssl req -new -sha256 \
-  -key "${WORKDIR}/distribution.key" \
-  -out "${WORKDIR}/distribution.csr" \
-  -config "${WORKDIR}/openssl.cnf"
+unlock_dist_keychain
 
 python3 "${SCRIPT_DIR}/asc_signing.py" prepare \
-  --certificate-out "${WORKDIR}/distribution.cer" \
-  --manifest "${MANIFEST}" \
   --profiles-dir "${HOME}/Library/MobileDevice/Provisioning Profiles" \
-  --csr "${WORKDIR}/distribution.csr" \
   --team "${TEAM}" \
   --keychain "${KEYCHAIN}" \
   --pbxproj "${APP}/LojoNetworks.xcodeproj/project.pbxproj" \
   --export-plist "${ROOT}/build/ExportOptions.plist"
 
-openssl x509 -inform DER -in "${WORKDIR}/distribution.cer" -out "${WORKDIR}/distribution.pem"
-openssl rand -base64 32 | tr -d '\n' > "${WORKDIR}/keychain.pass"
-chmod 600 "${WORKDIR}/keychain.pass"
-openssl pkcs12 -export \
-  -inkey "${WORKDIR}/distribution.key" \
-  -in "${WORKDIR}/distribution.pem" \
-  -out "${WORKDIR}/distribution.p12" \
-  -passout "file:${WORKDIR}/keychain.pass"
-security create-keychain -p "$(cat "${WORKDIR}/keychain.pass")" "${KEYCHAIN}"
-KEYCHAIN_READY=1
-security set-keychain-settings -lut 21600 "${KEYCHAIN}"
-security unlock-keychain -p "$(cat "${WORKDIR}/keychain.pass")" "${KEYCHAIN}"
-security import "${WORKDIR}/distribution.p12" \
-  -k "${KEYCHAIN}" \
-  -P "$(cat "${WORKDIR}/keychain.pass")" \
-  -f pkcs12 -A \
-  -T /usr/bin/codesign \
-  -T /usr/bin/security >/dev/null
-security set-key-partition-list \
-  -S apple-tool:,apple:,codesign: \
-  -s \
-  -k "$(cat "${WORKDIR}/keychain.pass")" \
-  "${KEYCHAIN}" >/dev/null
-security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db >/dev/null
-security default-keychain -s "${KEYCHAIN}"
-if ! security find-identity -p codesigning "${KEYCHAIN}" 2>/dev/null | grep -q "Distribution"; then
-  echo "The distribution certificate did not import into the temporary keychain." >&2
-  exit 1
-fi
-
+# Manual signing uses the installed profile and the shared certificate.
+# Xcode is not given permission to create signing assets.
 echo "Archiving with manual distribution signing."
 xcodebuild archive \
   -project "${APP}/LojoNetworks.xcodeproj" \
@@ -293,9 +472,6 @@ KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
 release_status=$?
 set -e
 if [[ "${release_status}" -ne 0 ]]; then
-  # Revoking the certificate while App Store Connect is still processing
-  # makes the upload fail signature checks.
-  export SKIP_CERTIFICATE_REVOKE=1
   exit "${release_status}"
 fi
 echo "TestFlight build ${BUILD_NUMBER}"

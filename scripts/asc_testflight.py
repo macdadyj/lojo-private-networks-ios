@@ -188,7 +188,7 @@ def group_contains_build(token, group_id, build_id):
     the read that role allows. None means the caller should assign and use
     the write response to learn whether the build was already a member.
     """
-    query = urllib.parse.urlencode({"limit": "200", "fields[builds]": "version"})
+    query = urllib.parse.urlencode({"limit": "200"})
     path = f"/v1/betaGroups/{group_id}/builds?{query}"
     root = signing.API_ROOT
     for _page in range(5):
@@ -223,6 +223,7 @@ def assign_build(token, group_id, build_id):
 
 
 def automatic_group_refusal(body):
+    """True only for the 422 Apple returns when the group already takes every build."""
     try:
         data = json.loads(body or "{}")
     except json.JSONDecodeError:
@@ -233,25 +234,26 @@ def automatic_group_refusal(body):
         text.append(str(err.get("title") or ""))
         text.append(str(err.get("detail") or ""))
     joined = " ".join(text).lower()
-    return "internal group" in joined
+    return (
+        "cannot add internal group" in joined
+        or "cannot be assigned to this internal group" in joined
+    )
 
 
-def enable_all_builds(token, group_id):
-    payload = {
-        "data": {
-            "type": "betaGroups",
-            "id": group_id,
-            "attributes": {"hasAccessToAllBuilds": True},
-        }
-    }
-    status, body = signing.api(token, "PATCH", f"/v1/betaGroups/{group_id}", payload)
-    if status in (200, 409):
-        return True
-    if status == 403:
-        show("could not turn on access to every build for the internal group")
-        return False
-    parsed(status, body, "internal group all builds")
-    return True
+# Groups that already refused a manual add. Later polls must not POST again.
+SKIPPED_ADDS = set()
+LOGGED = set()
+
+
+def show_once(line):
+    if line in LOGGED:
+        return
+    LOGGED.add(line)
+    show(line)
+
+
+def group_receives_every_build(group):
+    return (group.get("attributes") or {}).get("hasAccessToAllBuilds") is True
 
 
 def tester_count(token, group_id):
@@ -331,16 +333,33 @@ def report_found(version, attributes, detail, group_names):
         show("internalGroups=none")
 
 
-def build_listed_in_groups(token, groups, build_id):
-    """True when an internal group lists the build, or the list cannot be read."""
+def note_group_builds(token, group, build_id, version):
+    contained = group_contains_build(token, group["id"], build_id)
+    gid = group["id"]
+    if contained is True:
+        show_once(f"GET /v1/betaGroups/{gid}/builds includes build {version}")
+    elif contained is False:
+        show_once(f"GET /v1/betaGroups/{gid}/builds does not include build {version}")
+    else:
+        show_once(f"GET /v1/betaGroups/{gid}/builds could not be read")
+    return contained
+
+
+def build_listed_in_groups(token, groups, build_id, version):
+    """True when an internal group lists the build.
+
+    A group that cannot be read still counts as listed, except when that group
+    receives every build automatically: then the GET result is required.
+    """
     if not groups:
         return True
     saw_no = False
     for group in groups:
-        contained = group_contains_build(token, group["id"], build_id)
-        if contained is None:
+        contained = note_group_builds(token, group, build_id, version)
+        automatic = group_receives_every_build(group) or group["id"] in SKIPPED_ADDS
+        if contained is None and not automatic:
             return True
-        if contained:
+        if contained is True:
             return True
         saw_no = True
     return not saw_no
@@ -370,24 +389,35 @@ def membership_before_change(token, groups, build_id):
     return names
 
 
-def ensure_group_membership(token, groups, build_id, changes):
+def ensure_group_membership(token, groups, build_id, version, changes):
     for group in groups:
         name = (group.get("attributes") or {}).get("name") or "internal"
-        contained = group_contains_build(token, group["id"], build_id)
+        gid = group["id"]
+        contained = note_group_builds(token, group, build_id, version)
+        if group_receives_every_build(group) or gid in SKIPPED_ADDS:
+            if group_receives_every_build(group):
+                line = f"skipped manual add; {name} hasAccessToAllBuilds=true"
+            else:
+                line = f"skipped manual add; {name} rejected an explicit add"
+            if line not in changes:
+                changes.append(line)
+                show(line)
+            if contained is True:
+                line = f"build already in internal group {name}"
+                if line not in changes:
+                    changes.append(line)
+                    show(line)
+            continue
         if contained is True:
             line = f"build already in internal group {name}"
             if line not in changes:
                 changes.append(line)
                 show(line)
             continue
-        result = assign_build(token, group["id"], build_id)
+        result = assign_build(token, gid, build_id)
         if result == "automatic":
-            enabled = enable_all_builds(token, group["id"])
-            line = (
-                f"internal group {name} receives every build"
-                if enabled
-                else f"internal group {name} did not accept this build yet"
-            )
+            SKIPPED_ADDS.add(gid)
+            line = f"skipped manual add; {name} rejected an explicit add"
         elif result == "already":
             line = f"build already in internal group {name}"
         else:
@@ -398,6 +428,8 @@ def ensure_group_membership(token, groups, build_id, changes):
 
 
 def release(version, wait_seconds, require_ready):
+    SKIPPED_ADDS.clear()
+    LOGGED.clear()
     token = signing.jwt_from_env()
     app_id = find_app(token)
     found = None
@@ -439,7 +471,7 @@ def release(version, wait_seconds, require_ready):
                 changes.append("set usesNonExemptEncryption=false")
                 show("set usesNonExemptEncryption=false")
         groups, _created = ensure_internal_group(token, app_id)
-        ensure_group_membership(token, groups, build_id, changes)
+        ensure_group_membership(token, groups, build_id, version, changes)
         for group in groups:
             name = (group.get("attributes") or {}).get("name") or "internal"
             linked = link_internal_testers(token, group["id"])
@@ -450,7 +482,7 @@ def release(version, wait_seconds, require_ready):
                     show(line)
         processing = attributes.get("processingState")
         internal = detail.get("internalBuildState")
-        listed = build_listed_in_groups(token, groups, build_id)
+        listed = build_listed_in_groups(token, groups, build_id, version)
         if processing in ("FAILED", "INVALID"):
             show("final processingState=" + value_text(processing))
             show("final internalBuildState=" + value_text(internal))
@@ -466,11 +498,52 @@ def release(version, wait_seconds, require_ready):
             show("final processingState=" + value_text(processing))
             show("final internalBuildState=" + value_text(internal))
             if require_ready:
-                sys.stderr.write("Build is not in internal testing yet.\n")
+                if processing == "VALID" and not listed:
+                    sys.stderr.write(
+                        f"Build {version} is VALID but GET /v1/betaGroups/{{id}}/builds did not include it.\n"
+                    )
+                else:
+                    sys.stderr.write("Build is not in internal testing yet.\n")
                 raise SystemExit(1)
             show("still waiting on App Store Connect processing")
             return
         time.sleep(20)
+
+
+def group_membership(version):
+    """Report whether GET /v1/betaGroups/{id}/builds lists this build. Does not assign it."""
+    if not version:
+        raise SystemExit("Missing build number.")
+    token = signing.jwt_from_env()
+    app_id = find_app(token)
+    found = find_build(token, app_id, version)
+    if found is None:
+        sys.stderr.write(f"Build {version} is not in App Store Connect.\n")
+        raise SystemExit(1)
+    build, _detail = found
+    attributes = build.get("attributes") or {}
+    show(f"build {version} processingState=" + value_text(attributes.get("processingState")))
+    groups = internal_groups(token, app_id)
+    if not groups:
+        sys.stderr.write("No internal beta group.\n")
+        raise SystemExit(1)
+    found_in = False
+    for group in groups:
+        attrs = group.get("attributes") or {}
+        name = attrs.get("name") or "internal"
+        show(
+            f"internalGroup {name} hasAccessToAllBuilds="
+            + value_text(attrs.get("hasAccessToAllBuilds"))
+        )
+        contained = note_group_builds(token, group, build["id"], version)
+        if contained is True:
+            found_in = True
+    if not found_in:
+        sys.stderr.write(
+            f"Build {version} is not listed by GET /v1/betaGroups/{{id}}/builds.\n"
+        )
+        raise SystemExit(1)
+    show(f"build {version} is in the internal group")
 
 
 def write_key(destination):
@@ -571,7 +644,7 @@ def self_test():
                     "errors": [{"status": "403", "code": "FORBIDDEN_ERROR", "detail": "GET_RELATED"}]
                 })
             data = []
-            if "GROUP" in state["assigned"]:
+            if "GROUP" in state["assigned"] or state.get("refused_assign") or state.get("list_build"):
                 data.append({"type": "builds", "id": "BUILD", "attributes": {"version": "164"}})
             return 200, json.dumps({"data": data})
         if path == "/v1/builds/BUILD" and method == "PATCH":
@@ -580,8 +653,17 @@ def self_test():
             state["internal"] = "READY_FOR_BETA_TESTING"
             return 200, json.dumps({"data": {"type": "builds", "id": "BUILD"}})
         if path == "/v1/betaGroups/GROUP/relationships/builds" and method == "POST":
+            state["assign_posts"] = state.get("assign_posts", 0) + 1
+            if state.get("other_422"):
+                return 422, json.dumps({
+                    "errors": [{
+                        "status": "422",
+                        "code": "ENTITY_UNPROCESSABLE",
+                        "detail": "The build is not available.",
+                    }]
+                })
             if state.get("refuse_assign"):
-                state["refuse_assign"] = False
+                state["refused_assign"] = True
                 return 422, json.dumps({
                     "errors": [{
                         "status": "422",
@@ -594,7 +676,7 @@ def self_test():
             state["internal"] = "IN_BETA_TESTING"
             return 204, ""
         if path == "/v1/betaGroups/GROUP" and method == "PATCH":
-            state["assigned"].add("GROUP")
+            state["patches"] = state.get("patches", 0) + 1
             return 200, json.dumps({"data": {"type": "betaGroups", "id": "GROUP"}})
         if path.startswith("/v1/betaGroups/GROUP/betaTesters"):
             testers = [{"id": "T", "attributes": {"state": "ACTIVE"}}] if state["testers"] else []
@@ -632,6 +714,8 @@ def self_test():
     try:
         release("164", wait_seconds=60, require_ready=True)
         text = captured.getvalue()
+        first_assigned = "GROUP" in state["assigned"]
+        first_encryption = state["encryption"] is False
         captured.seek(0)
         captured.truncate(0)
         state["encryption"] = None
@@ -664,8 +748,51 @@ def self_test():
         state["ticks"] = 0
         state["hide_group_builds"] = False
         state["refuse_assign"] = True
+        state["refused_assign"] = False
+        state["list_build"] = False
+        state["assign_posts"] = 0
+        state["patches"] = 0
+        state["other_422"] = False
+        try:
+            release("164", wait_seconds=60, require_ready=True)
+            automatic = captured.getvalue()
+        except SystemExit:
+            automatic = captured.getvalue()
+            raise
+        refused_posts = state.get("assign_posts")
+        refused_patches = state.get("patches") or 0
+        captured.seek(0)
+        captured.truncate(0)
+        state["groups"] = [{
+            "type": "betaGroups",
+            "id": "GROUP",
+            "attributes": {
+                "name": "Internal",
+                "isInternalGroup": True,
+                "hasAccessToAllBuilds": True,
+            },
+        }]
+        state["assigned"] = set()
+        state["refuse_assign"] = False
+        state["refused_assign"] = False
+        state["list_build"] = True
+        state["assign_posts"] = 0
+        state["patches"] = 0
+        state["ticks"] = 0
         release("164", wait_seconds=60, require_ready=True)
-        automatic = captured.getvalue()
+        access_all = captured.getvalue()
+        access_posts = state.get("assign_posts")
+        captured.seek(0)
+        captured.truncate(0)
+        state["other_422"] = True
+        state["list_build"] = False
+        state["assign_posts"] = 0
+        try:
+            assign_build("token", "GROUP", "BUILD")
+        except SystemExit:
+            other_422_stopped = True
+        else:
+            other_422_stopped = False
     finally:
         sys.stdout = held
         signing.api = real_api
@@ -690,7 +817,7 @@ def self_test():
             raise SystemExit("self-test missing: " + line)
     if "owner@example.com" in text:
         raise SystemExit("self-test printed a tester address")
-    if state["encryption"] is not False or "GROUP" not in state["assigned"]:
+    if not first_encryption or not first_assigned:
         raise SystemExit("self-test did not update compliance and the group")
     if state.get("used_forbidden_read"):
         raise SystemExit("self-test read a build's betaGroups relationship")
@@ -704,10 +831,24 @@ def self_test():
             raise SystemExit("self-test missing after unreadable groups: " + line)
     if "owner@example.com" in hidden:
         raise SystemExit("self-test printed a tester address")
-    if "internal group Internal receives every build" not in automatic:
-        raise SystemExit("self-test did not keep going after an automatic internal group")
+    if "skipped manual add; Internal rejected an explicit add" not in automatic:
+        raise SystemExit("self-test did not treat the internal-group 422 as success")
+    if "GET /v1/betaGroups/GROUP/builds includes build 164" not in automatic:
+        raise SystemExit("self-test did not confirm the build with GET /v1/betaGroups/{id}/builds")
+    if refused_posts != 1:
+        raise SystemExit("self-test retried the manual add after the 422")
+    if refused_patches:
+        raise SystemExit("self-test changed the internal group after the 422")
     if "final processingState=VALID" not in automatic or "final internalBuildState=READY_FOR_BETA_TESTING" not in automatic:
         raise SystemExit("self-test did not finish after the automatic internal group")
+    if "skipped manual add; Internal hasAccessToAllBuilds=true" not in access_all:
+        raise SystemExit("self-test did not skip the add for hasAccessToAllBuilds")
+    if "GET /v1/betaGroups/GROUP/builds includes build 164" not in access_all:
+        raise SystemExit("self-test did not read builds for the automatic group")
+    if access_posts != 0:
+        raise SystemExit("self-test assigned a build to a group that already receives every build")
+    if not other_422_stopped:
+        raise SystemExit("self-test treated an unrelated 422 as success")
     show("asc testflight: ok")
 
 
@@ -715,7 +856,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
         return
-    if len(sys.argv) > 1 and sys.argv[1] in ("release", "adopt"):
+    if len(sys.argv) > 1 and sys.argv[1] in ("release", "adopt", "group-membership"):
         command = sys.argv[1]
         version = os.environ.get("BUILD_NUMBER", "")
         wait_seconds = 900
@@ -741,6 +882,10 @@ def main():
         try:
             if command == "adopt":
                 adopt(version or os.environ.get("BUILD_NUMBER", ""), wait_seconds)
+            elif command == "group-membership":
+                if not version:
+                    raise SystemExit("Missing build number.")
+                group_membership(version)
             else:
                 if not version:
                     raise SystemExit("Missing build number.")
@@ -751,7 +896,8 @@ def main():
         return
     raise SystemExit(
         "Usage: asc_testflight.py --self-test | adopt [--wait-seconds N] | "
-        "release [--build N] [--wait-seconds N] [--require-ready]"
+        "release [--build N] [--wait-seconds N] [--require-ready] | "
+        "group-membership --build N"
     )
 
 
