@@ -199,7 +199,7 @@ final class SoundMachine {
         }
     }
 
-    private func libraryItems(_ request: LibraryRequest) -> [MusicTrack] {
+    private func libraryItems(_ request: LibraryRequest) -> [LojoRemote.MusicTrack] {
         switch request.scope {
         case "recent":
             return songs(matching: "").filter { $0.subtitle == "recent" }
@@ -227,7 +227,7 @@ final class SoundMachine {
         }
     }
 
-    private func songs(matching query: String) -> [MusicTrack] {
+    private func songs(matching query: String) -> [LojoRemote.MusicTrack] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let items = (MPMediaQuery.songs().items ?? []).filter { item in
             guard !needle.isEmpty else { return true }
@@ -244,8 +244,8 @@ final class SoundMachine {
 
     private var requestIsRecent: Bool { libraryRequest.scope == "recent" }
 
-    private func songTrack(_ item: MPMediaItem, recent: Bool) -> MusicTrack {
-        MusicTrack(
+    private func songTrack(_ item: MPMediaItem, recent: Bool) -> LojoRemote.MusicTrack {
+        LojoRemote.MusicTrack(
             id: "music:\(item.persistentID)",
             title: item.title ?? "Untitled",
             artist: item.artist ?? "",
@@ -255,11 +255,11 @@ final class SoundMachine {
         )
     }
 
-    private func collections(_ query: MPMediaQuery, kind: String, prefix: String) -> [MusicTrack] {
+    private func collections(_ query: MPMediaQuery, kind: String, prefix: String) -> [LojoRemote.MusicTrack] {
         (query.collections ?? []).map { collection in
             let name = collection.value(forProperty: nameProperty(kind)) as? String ?? "Untitled"
             let id = collection.persistentID
-            return MusicTrack(id: "\(prefix):\(id)", title: name, artist: "", subtitle: kind.capitalized, kind: kind, artworkJPEG: artworkJPEG(collection.representativeItem?.artwork))
+            return LojoRemote.MusicTrack(id: "\(prefix):\(id)", title: name, artist: "", subtitle: kind.capitalized, kind: kind, artworkJPEG: artworkJPEG(collection.representativeItem?.artwork))
         }
     }
 
@@ -272,7 +272,7 @@ final class SoundMachine {
         }
     }
 
-    private func playlistSongs(id: String) -> [MusicTrack] {
+    private func playlistSongs(id: String) -> [LojoRemote.MusicTrack] {
         let raw = id.dropFirst("playlist:".count)
         guard let persistent = UInt64(raw) else { return [] }
         let query = MPMediaQuery.playlists()
