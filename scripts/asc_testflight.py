@@ -207,6 +207,14 @@ def group_contains_build(token, group_id, build_id):
     return False
 
 
+def assignment_refused(status, body):
+    """Internal groups that already receive every build reject a manual add."""
+    if status != 422:
+        return False
+    text = (body or "").lower()
+    return "internal group" in text and ("cannot add" in text or "cannot be assigned" in text)
+
+
 def assign_build(token, group_id, build_id):
     payload = {"data": [{"type": "builds", "id": build_id}]}
     status, body = signing.api(
@@ -216,6 +224,8 @@ def assign_build(token, group_id, build_id):
         return "added"
     if status == 409:
         return "already"
+    if assignment_refused(status, body):
+        return "automatic"
     parsed(status, body, "assign build")
     return "added"
 
@@ -334,6 +344,11 @@ def ensure_group_membership(token, groups, build_id, changes):
         result = assign_build(token, group["id"], build_id)
         if result == "already":
             line = f"build already in internal group {name}"
+        elif result == "automatic":
+            line = (
+                f"internal group {name} already receives every build; "
+                "left the individual assignment unchanged"
+            )
         else:
             line = f"added build to internal group {name}"
         if line not in changes:
@@ -617,6 +632,15 @@ def self_test():
             raise SystemExit("self-test missing after unreadable groups: " + line)
     if "owner@example.com" in hidden:
         raise SystemExit("self-test printed a tester address")
+    refused = (
+        '{"errors":[{"status":"422","code":"ENTITY_UNPROCESSABLE",'
+        '"title":"Builds cannot be assigned to this internal group.",'
+        '"detail":"Cannot add internal group to a build."}]}'
+    )
+    if not assignment_refused(422, refused):
+        raise SystemExit("self-test did not recognize an automatic internal group")
+    if assignment_refused(409, refused) or assignment_refused(422, "something else"):
+        raise SystemExit("self-test treated an ordinary error as an automatic group")
     show("asc testflight: ok")
 
 
