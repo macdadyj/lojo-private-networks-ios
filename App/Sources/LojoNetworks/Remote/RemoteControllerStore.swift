@@ -17,6 +17,7 @@ enum RemotePreferences {
     static let roleKey = "lojo.remote.role"
     static let nameKey = "lojo.remote.name"
     static let phoneIDKey = "lojo.remote.phoneID"
+    static let controlModeKey = "lojo.remote.controlMode"
 
     static func relayURL(launch: LaunchOptions) -> URL? {
         if let text = launch.relayURLText { return RelayEndpoint.url(from: text) }
@@ -58,7 +59,7 @@ final class RemoteControllerStore: ObservableObject {
         siteAccess = RemoteSiteAccess(launch: launch, site: site)
         demo = launch.remoteDemo
         if demo {
-            phones = [RemotePhone.demoSpare]
+            phones = [RemotePhone.demoSpare, RemotePhone.demoBarn]
         }
     }
 
@@ -195,6 +196,24 @@ extension RemotePhone {
         playback: .idle,
         schedules: [],
         music: [LojoRemote.MusicTrack(id: "music:demo", title: "Night Drive", artist: "Sample")],
+        shortcuts: SampleAutomations.shortcuts
+    )
+
+    static let demoBarn = RemotePhone(
+        id: "demo-barn",
+        name: "Barn phone",
+        online: true,
+        batteryPercent: 40,
+        charging: true,
+        playback: PlaybackSnapshot(
+            playing: true,
+            soundID: BundledSound.rain.rawValue,
+            title: "Rain",
+            volume: 0.4,
+            source: .bundled
+        ),
+        schedules: [],
+        music: [],
         shortcuts: SampleAutomations.shortcuts
     )
 }

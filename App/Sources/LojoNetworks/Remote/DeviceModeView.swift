@@ -5,15 +5,29 @@ struct DeviceModeView: View {
     @EnvironmentObject private var device: RemoteDeviceRuntime
     @EnvironmentObject private var router: Router
     @AppStorage(RemotePreferences.roleKey) private var role = "controller"
+    @AppStorage(RemotePreferences.controlModeKey) private var controlMode = true
     @State private var shortcutName = ""
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("This iPhone is the sound machine. Leave this screen open. Your other phone controls it.")
+                    Text("This phone is the sound machine. Your other phone controls it while Control mode is on.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Control mode", isOn: $controlMode)
+                            .font(.headline)
+                            .accessibilityIdentifier("device.control-mode")
+                        Text(controlMode
+                             ? "On. A sound that is playing keeps going with the screen locked, and play, stop, and schedules still arrive. Closing the app from the app switcher stops control until you open it again. With nothing playing, iOS may suspend this app soon after the screen locks, and the other phone will show Not reachable."
+                             : "Off. This phone is not listening. The other phone will show Not reachable.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .card()
                     VStack(alignment: .leading, spacing: 6) {
                         Text(device.relayStatus)
                             .font(.headline)

@@ -74,6 +74,14 @@ struct RemotePanelView: View {
                 Text(phone.batteryLabel)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Text(phone.online ? "Reachable" : "Not reachable")
+                    .font(.subheadline.weight(.semibold))
+                Text(phone.online
+                     ? "Control mode is answering."
+                     : "It answers while Control mode is on and iOS is letting the app run. A playing sound keeps it awake with the screen locked. Closing the app from the app switcher stops control until it is opened again.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }

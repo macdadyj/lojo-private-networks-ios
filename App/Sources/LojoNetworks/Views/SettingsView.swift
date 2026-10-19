@@ -77,7 +77,7 @@ struct SettingsView: View {
                 } header: {
                     Text("iPhone Remote Controller")
                 } footer: {
-                    Text("Both phones use the site gateway you already paired. Leave this screen open on the spare iPhone and turn on the sound machine. The override is only for a relay that is not that gateway.")
+                    Text("Both phones use the site gateway you already paired. Turn on Control mode on each spare phone and give that phone its own name. The override is only for a relay that is not that gateway.")
                 }
 
                 Section("Appearance") {

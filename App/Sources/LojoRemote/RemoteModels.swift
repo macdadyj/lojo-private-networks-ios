@@ -8,7 +8,7 @@ public enum RemoteHelpCopy {
 
     Both phones use the site gateway you already paired. There is no separate relay address to type.
 
-    What does travel across your private network: play and stop, the sound you pick, volume for the built-in sounds, a sleep timer, and schedules such as white noise from 8:00 PM to 6:00 AM. Schedules run on the spare iPhone while iPhone Remote Controller is open there. Locking the screen keeps sound playing, including the stop time. A start time fires while that mode is still running. iOS will not launch it from a force-quit at an exact minute.
+    What does travel across your private network: play and stop, the sound you pick, volume for the built-in sounds, a sleep timer, and schedules such as white noise from 8:00 PM to 6:00 AM. Schedules run on the spare phone while Control mode is on. A sound that is playing continues with the screen locked, including the stop time. With nothing playing, iOS may suspend the app soon after the screen locks, and the controlling phone shows Not reachable. A start time fires while Control mode is still running. iOS will not launch it after the app is closed from the app switcher.
 
     Apple Music uses the spare iPhone's own volume buttons. iOS does not let another phone set the system volume. Built-in sounds use the volume slider.
 

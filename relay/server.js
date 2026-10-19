@@ -86,6 +86,42 @@ async function selfTest() {
   if (listed.parsed.phones.length !== 1 || listed.parsed.phones[0].batteryPercent !== 81) {
     throw new Error("list failed");
   }
+  const second = await call("POST", "/v1/phones", {
+    id: "phone-2",
+    name: "Zebra phone",
+    batteryPercent: 44,
+    charging: true,
+    schedules: [],
+  });
+  if (second.status !== 200 || second.parsed.phone.name !== "Zebra phone") throw new Error("second phone failed");
+  const both = await call("GET", "/v1/phones");
+  if (both.parsed.phones.length !== 2) throw new Error("two phones were not listed");
+  const zebraPlay = await call("POST", "/v1/phones/phone-2/commands", { kind: "play", soundID: "rain" });
+  if (zebraPlay.status !== 200) throw new Error("second command failed");
+  const spareBeat = await call("POST", "/v1/phones/phone-1/heartbeat", {
+    batteryPercent: 81,
+    charging: false,
+    playback: { playing: false, volume: 0.6, source: "none" },
+    ack: [],
+  });
+  const zebraBeat = await call("POST", "/v1/phones/phone-2/heartbeat", {
+    batteryPercent: 44,
+    charging: true,
+    playback: { playing: false, volume: 0.4, source: "none" },
+    ack: [],
+  });
+  if ((spareBeat.parsed.commands || []).some((command) => command.soundID === "rain")) {
+    throw new Error("a command for the second phone was delivered to the first");
+  }
+  if (zebraBeat.parsed.commands.length !== 1 || zebraBeat.parsed.commands[0].soundID !== "rain") {
+    throw new Error("the second phone did not receive its own command");
+  }
+  await call("POST", "/v1/phones/phone-2/heartbeat", {
+    batteryPercent: 44,
+    charging: true,
+    playback: { playing: false, volume: 0.4, source: "none" },
+    ack: [zebraPlay.parsed.command.id],
+  });
   const hidden = await call("GET", "/v1/phones", null, { "X-Lojo-Network": "other-room" });
   if (hidden.parsed.phones.length !== 0) throw new Error("rooms were not isolated");
   const play = await call("POST", "/v1/phones/phone-1/commands", { kind: "play", soundID: "white-noise" });

@@ -11,19 +11,18 @@ final class RemoteDeviceRuntime: ObservableObject {
     @Published private(set) var batteryLabel = "Battery unknown"
     @Published private(set) var schedules: [SoundSchedule] = []
     @Published private(set) var shortcuts: [NamedShortcut] = SampleAutomations.shortcuts
-    let phoneName: String
     private let launch: LaunchOptions
     private let siteAccess: RemoteSiteAccess
     private var machine: SoundMachine { RemoteIntentBridge.shared.machine }
     private var hold = ScheduleHold()
     private var revision = 0
     private var registered = false
+    private var registeredName = ""
     private let phoneID: String
 
     init(launch: LaunchOptions, site: NetworkStore) {
         self.launch = launch
         siteAccess = RemoteSiteAccess(launch: launch, site: site)
-        phoneName = RemotePreferences.phoneName(launch: launch)
         phoneID = RemotePreferences.phoneID(launch: launch)
         schedules = Self.storedSchedules()
         revision = UserDefaults.standard.integer(forKey: Self.revisionKey)
@@ -51,8 +50,9 @@ final class RemoteDeviceRuntime: ObservableObject {
             playback = machine.snapshot(now: now)
             return
         }
-        if !registered {
-            await register()
+        let name = RemotePreferences.phoneName(launch: launch)
+        if !registered || registeredName != name {
+            await register(name: name)
         }
         var ack: [String] = []
         do {
@@ -109,12 +109,12 @@ final class RemoteDeviceRuntime: ObservableObject {
         batteryLabel = batteryText()
     }
 
-    private func register() async {
+    private func register(name: String) async {
         do {
             _ = try await siteAccess.first { client in
                 try await client.register(RegisterBody(
                 id: phoneID,
-                name: phoneName,
+                name: name,
                 batteryPercent: batteryPercent(),
                 charging: charging,
                 schedules: schedules,
@@ -122,6 +122,7 @@ final class RemoteDeviceRuntime: ObservableObject {
             ))
             }
             registered = true
+            registeredName = name
             noteSuccess()
         } catch {
             noteFailure(error)
