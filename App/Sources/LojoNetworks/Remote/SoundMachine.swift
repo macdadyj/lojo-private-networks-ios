@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import LojoRemote
 import MediaPlayer
+import UIKit
 
 /// Plays bundled sound-machine loops and, when the library allows it, Apple Music.
 @MainActor
@@ -15,6 +16,7 @@ final class SoundMachine {
     private var source: PlaybackSource = .none
     private var message: String?
     private var files: [String: URL] = [:]
+    private var libraryRequest = LibraryRequest(scope: "songs", page: 0)
 
     func prepareSession() {
         let session = AVAudioSession.sharedInstance()
@@ -27,8 +29,25 @@ final class SoundMachine {
     }
 
     func play(soundID: String) {
+        if soundID == "transport:next" {
+            skip(next: true)
+            return
+        }
+        if soundID == "transport:previous" {
+            skip(next: false)
+            return
+        }
+        if let request = LibraryRequest.parse(soundID) {
+            libraryRequest = request
+            message = nil
+            return
+        }
         prepareSession()
         message = nil
+        if soundID.hasPrefix("playlist:") {
+            playPlaylist(id: soundID)
+            return
+        }
         if soundID.hasPrefix("music:") {
             playMusic(soundID: soundID)
             return
@@ -156,14 +175,146 @@ final class SoundMachine {
 
     func musicCatalog() -> [LojoRemote.MusicTrack] {
         guard MPMediaLibrary.authorizationStatus() == .authorized else { return [] }
-        let items = MPMediaQuery.songs().items ?? []
-        return items.prefix(40).map { item in
-            LojoRemote.MusicTrack(
-                id: "music:\(item.persistentID)",
-                title: item.title ?? "Untitled",
-                artist: item.artist ?? ""
-            )
+        let request = libraryRequest
+        let all = libraryItems(request)
+        let sliced = LibraryPageSlice.slice(all, page: request.page)
+        return sliced.items.map { item in
+            var copy = item
+            copy.scope = request.scope
+            copy.page = sliced.page
+            copy.pageCount = sliced.pageCount
+            return copy
         }
+    }
+
+    private func skip(next: Bool) {
+        guard source == .appleMusic else {
+            message = "Next and previous move through the Music library."
+            return
+        }
+        if next { music.skipToNextItem() } else { music.skipToPreviousItem() }
+        if let item = music.nowPlayingItem {
+            title = item.title ?? title
+            soundID = "music:\(item.persistentID)"
+        }
+    }
+
+    private func libraryItems(_ request: LibraryRequest) -> [MusicTrack] {
+        switch request.scope {
+        case "recent":
+            return songs(matching: "").filter { $0.subtitle == "recent" }
+        case "playlists":
+            return collections(MPMediaQuery.playlists(), kind: "playlist", prefix: "playlist")
+        case "artists":
+            return collections(MPMediaQuery.artists(), kind: "artist", prefix: "artist")
+        case "albums":
+            return collections(MPMediaQuery.albums(), kind: "album", prefix: "album")
+        case "queue":
+            guard let item = music.nowPlayingItem, item.albumPersistentID != 0 else { return [] }
+            return songs(matching: "").filter { ($0.subtitle ?? "").contains("album:\(item.albumPersistentID)") }
+        case "search":
+            return songs(matching: request.query)
+        case "songs":
+            if request.parent.hasPrefix("playlist:") {
+                return playlistSongs(id: request.parent)
+            }
+            if request.parent.hasPrefix("album:") || request.parent.hasPrefix("artist:") {
+                return songs(matching: "").filter { ($0.subtitle ?? "").contains(request.parent) }
+            }
+            return songs(matching: "")
+        default:
+            return []
+        }
+    }
+
+    private func songs(matching query: String) -> [MusicTrack] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let items = (MPMediaQuery.songs().items ?? []).filter { item in
+            guard !needle.isEmpty else { return true }
+            let title = item.title ?? ""
+            let artist = item.artist ?? ""
+            return title.localizedCaseInsensitiveContains(needle) || artist.localizedCaseInsensitiveContains(needle)
+        }
+        let recent = requestIsRecent
+        let sorted = recent
+            ? items.sorted { ($0.lastPlayedDate ?? .distantPast) > ($1.lastPlayedDate ?? .distantPast) }.filter { $0.lastPlayedDate != nil }
+            : items
+        return sorted.map { songTrack($0, recent: recent) }
+    }
+
+    private var requestIsRecent: Bool { libraryRequest.scope == "recent" }
+
+    private func songTrack(_ item: MPMediaItem, recent: Bool) -> MusicTrack {
+        MusicTrack(
+            id: "music:\(item.persistentID)",
+            title: item.title ?? "Untitled",
+            artist: item.artist ?? "",
+            subtitle: recent ? "recent" : "album:\(item.albumPersistentID) artist:\(item.artistPersistentID)",
+            kind: "song",
+            artworkJPEG: artworkJPEG(item.artwork)
+        )
+    }
+
+    private func collections(_ query: MPMediaQuery, kind: String, prefix: String) -> [MusicTrack] {
+        (query.collections ?? []).map { collection in
+            let name = collection.value(forProperty: nameProperty(kind)) as? String ?? "Untitled"
+            let id = collection.persistentID
+            return MusicTrack(id: "\(prefix):\(id)", title: name, artist: "", subtitle: kind.capitalized, kind: kind, artworkJPEG: artworkJPEG(collection.representativeItem?.artwork))
+        }
+    }
+
+    private func nameProperty(_ kind: String) -> String {
+        switch kind {
+        case "playlist": return MPMediaPlaylistPropertyName
+        case "artist": return MPMediaItemPropertyArtist
+        case "album": return MPMediaItemPropertyAlbumTitle
+        default: return MPMediaItemPropertyTitle
+        }
+    }
+
+    private func playlistSongs(id: String) -> [MusicTrack] {
+        let raw = id.dropFirst("playlist:".count)
+        guard let persistent = UInt64(raw) else { return [] }
+        let query = MPMediaQuery.playlists()
+        query.addFilterPredicate(MPMediaPropertyPredicate(value: NSNumber(value: persistent), forProperty: MPMediaPlaylistPropertyPersistentID))
+        guard let playlist = query.collections?.first else { return [] }
+        #if swift(>=6.2)
+        let songs = playlist.items
+        #else
+        let songs = playlist.items ?? []
+        #endif
+        return songs.map { songTrack($0, recent: false) }
+    }
+
+    private func playPlaylist(id: String) {
+        prepareSession()
+        let raw = id.dropFirst("playlist:".count)
+        guard let persistent = UInt64(raw), MPMediaLibrary.authorizationStatus() == .authorized else {
+            message = "Allow Music access on this phone, then try again."
+            return
+        }
+        let query = MPMediaQuery.playlists()
+        query.addFilterPredicate(MPMediaPropertyPredicate(value: NSNumber(value: persistent), forProperty: MPMediaPlaylistPropertyPersistentID))
+        guard let playlist = query.collections?.first else {
+            message = "That playlist is not on this phone."
+            return
+        }
+        player?.stop()
+        player = nil
+        music.stop()
+        music.setQueue(with: playlist)
+        music.play()
+        soundID = id
+        title = playlist.value(forProperty: MPMediaPlaylistPropertyName) as? String ?? "Playlist"
+        source = .appleMusic
+        message = "Music follows this phone's volume buttons."
+    }
+
+    private func artworkJPEG(_ artwork: MPMediaItemArtwork?) -> String? {
+        guard let image = artwork?.image(at: CGSize(width: 60, height: 60)),
+              let data = image.jpegData(compressionQuality: 0.5),
+              data.count <= 24_000 else { return nil }
+        return data.base64EncodedString()
     }
 
     private func playMusic(soundID: String) {

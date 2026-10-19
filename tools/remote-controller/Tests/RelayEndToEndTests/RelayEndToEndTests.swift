@@ -153,6 +153,17 @@ final class RelayEndToEndTests: XCTestCase {
         XCTAssertEqual(barn.commands.first?.soundID, "rain")
         XCTAssertEqual(spare.commands.map(\.kind), [.stop])
         XCTAssertFalse(spare.commands.contains { $0.soundID == "rain" })
+
+        let libraryID = LibraryRequest(scope: "songs", page: 0).soundID
+        _ = try await client.command(CommandBody(kind: .play, soundID: libraryID), phoneID: "spare-2")
+        let barnLibrary = try await client.heartbeat(HeartbeatBody(
+            batteryPercent: 40, charging: true, playback: .idle, music: [], lastError: nil, ack: []
+        ), phoneID: "spare-2")
+        let spareQuiet = try await client.heartbeat(HeartbeatBody(
+            batteryPercent: 80, charging: false, playback: .idle, music: [], lastError: nil, ack: []
+        ), phoneID: "spare-1")
+        XCTAssertTrue(barnLibrary.commands.contains { $0.soundID == libraryID })
+        XCTAssertFalse(spareQuiet.commands.contains { ($0.soundID ?? "").hasPrefix("library:") })
     }
 
     private func waitUntilReady(_ base: URL) async throws {

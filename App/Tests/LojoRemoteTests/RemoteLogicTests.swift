@@ -151,6 +151,22 @@ final class RemoteLogicTests: XCTestCase {
         }
     }
 
+    func testLibraryRequestRoundTripsAndDemoPagesStaySeparate() {
+        let request = LibraryRequest(scope: "search", page: 0, query: "Night Drive")
+        XCTAssertEqual(LibraryRequest.parse(request.soundID), request)
+        XCTAssertNil(LibraryRequest.parse("music:demo"))
+        XCTAssertNil(LibraryRequest.parse("library:nope:0::"))
+        XCTAssertEqual(DemoLibrary.page(scope: "search", page: 0, parent: "", query: "night").map(\.title), ["Night Drive", "Night Drive"])
+        XCTAssertEqual(DemoLibrary.page(scope: "search", page: 0, parent: "", query: "dawn").map(\.id), ["music:demo2"])
+        XCTAssertEqual(DemoLibrary.page(scope: "playlists", page: 0, parent: "", query: "").map(\.id), ["playlist:1"])
+        XCTAssertEqual(DemoLibrary.page(scope: "songs", page: 0, parent: "", query: "").map(\.id), ["music:demo", "music:demo2"])
+        let wide = Array(0..<30)
+        let sliced = LibraryPageSlice.slice(wide, page: 1)
+        XCTAssertEqual(sliced.page, 1)
+        XCTAssertEqual(sliced.pageCount, 2)
+        XCTAssertEqual(sliced.items.count, 6)
+    }
+
     func testRemotePathPrefersTheOverlayOffSiteWiFi() {
         let lan = "https://192.168.7.103:8443"
         let overlay = "https://100.96.1.18:8443"

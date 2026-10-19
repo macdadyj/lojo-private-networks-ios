@@ -143,6 +143,10 @@ final class RemoteDeviceRuntime: ObservableObject {
         switch command.kind {
         case .play:
             let soundID = command.soundID ?? BundledSound.whiteNoise.rawValue
+            if LibraryRequest.parse(soundID) != nil || soundID.hasPrefix("transport:") {
+                machine.play(soundID: soundID)
+                return
+            }
             machine.play(soundID: soundID)
             if let match = schedules.first(where: { $0.enabled && $0.soundID == soundID }) {
                 hold = ScheduleHold(activeScheduleID: match.id)

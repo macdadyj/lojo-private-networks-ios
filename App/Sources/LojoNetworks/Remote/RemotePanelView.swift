@@ -12,6 +12,7 @@ struct RemotePanelView: View {
     let phoneID: String
     @EnvironmentObject private var remote: RemoteControllerStore
     @State private var panelPage: PanelPage?
+    @State private var showLibrary = false
 
     private var phone: RemotePhone? { remote.phones.first { $0.id == phoneID } }
 
@@ -52,6 +53,14 @@ struct RemotePanelView: View {
         .navigationDestination(item: $panelPage) { page in
             panelDestination(page)
         }
+        .navigationDestination(isPresented: $showLibrary) {
+            MusicLibraryView(phoneID: phoneID)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let phone, phone.playback?.playing == true || phone.playback?.title != nil {
+                nowPlayingBar(phone)
+            }
+        }
     }
 
     @ViewBuilder
@@ -62,6 +71,56 @@ struct RemotePanelView: View {
         case .help:
             RemoteHelpView()
         }
+    }
+
+    private func nowPlayingBar(_ phone: RemotePhone) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(playbackLine(phone))
+                .font(.headline)
+                .lineLimit(1)
+            HStack(spacing: 16) {
+                Button {
+                    Task { await remote.skip(phoneID: phoneID, next: false) }
+                } label: {
+                    Image(systemName: "backward.fill")
+                }
+                .accessibilityIdentifier("remote.transport.previous")
+                Button {
+                    Task {
+                        if phone.playback?.playing == true {
+                            await remote.stop(phoneID: phoneID)
+                        } else {
+                            await remote.play(phoneID: phoneID)
+                        }
+                    }
+                } label: {
+                    Image(systemName: phone.playback?.playing == true ? "pause.fill" : "play.fill")
+                }
+                .accessibilityIdentifier("remote.transport.play")
+                Button {
+                    Task { await remote.skip(phoneID: phoneID, next: true) }
+                } label: {
+                    Image(systemName: "forward.fill")
+                }
+                .accessibilityIdentifier("remote.transport.next")
+                Button {
+                    showLibrary = true
+                    Task { await remote.browse(phoneID: phoneID, scope: "queue") }
+                } label: {
+                    Image(systemName: "list.bullet")
+                }
+                .accessibilityLabel("Queue")
+                .accessibilityIdentifier("remote.transport.queue")
+            }
+            .font(.title3)
+            Text("Built-in sounds use the volume slider. Music follows the spare phone's volume buttons.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
     }
 
     private func status(_ phone: RemotePhone) -> some View {
@@ -142,22 +201,23 @@ struct RemotePanelView: View {
             ForEach(BundledSound.allCases) { sound in
                 soundButton(id: sound.rawValue, title: sound.title, systemImage: sound.systemImage)
             }
-            if !phone.music.isEmpty {
-                Text("Apple Music on the spare iPhone")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                ForEach(phone.music) { track in
-                    soundButton(
-                        id: track.id,
-                        title: track.artist.isEmpty ? track.title : "\(track.title) · \(track.artist)",
-                        systemImage: "music.note"
-                    )
+            Button {
+                showLibrary = true
+            } label: {
+                HStack {
+                    Label("Music library", systemImage: "music.note.list")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-            } else {
-                Text("No Apple Music songs have been shared yet. On the spare iPhone, allow Music access.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("remote.library.open")
+            Text("Search, recent songs, playlists, artists, albums, and songs come from the spare phone. Large libraries arrive one page at a time.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .card()
     }

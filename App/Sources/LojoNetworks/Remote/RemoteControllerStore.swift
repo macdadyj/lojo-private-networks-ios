@@ -89,6 +89,28 @@ final class RemoteControllerStore: ObservableObject {
         }
     }
 
+    func browse(phoneID: String, scope: String, page: Int = 0, parent: String = "", query: String = "") async {
+        let tracks = DemoLibrary.page(scope: scope, page: page, parent: parent, query: query)
+        if demo {
+            update(phoneID) { $0.music = tracks }
+            return
+        }
+        let request = LibraryRequest(scope: scope, page: page, parent: parent, query: query)
+        await send(CommandBody(kind: .play, soundID: request.soundID), phoneID: phoneID) { _ in }
+    }
+
+    func skip(phoneID: String, next: Bool) async {
+        if demo {
+            update(phoneID) { phone in
+                phone.playback?.playing = true
+                phone.playback?.title = next ? "Dawn" : "Night Drive"
+                phone.playback?.source = .appleMusic
+            }
+            return
+        }
+        await send(CommandBody(kind: .play, soundID: next ? "transport:next" : "transport:previous"), phoneID: phoneID) { _ in }
+    }
+
     func play(phoneID: String) async {
         await send(CommandBody(kind: .play, soundID: selectedSoundID), phoneID: phoneID) {
             $0.playback = PlaybackSnapshot(
