@@ -216,8 +216,42 @@ def assign_build(token, group_id, build_id):
         return "added"
     if status == 409:
         return "already"
+    if status == 422 and automatic_group_refusal(body):
+        return "automatic"
     parsed(status, body, "assign build")
     return "added"
+
+
+def automatic_group_refusal(body):
+    try:
+        data = json.loads(body or "{}")
+    except json.JSONDecodeError:
+        return False
+    text = []
+    for err in data.get("errors") or []:
+        text.append(str(err.get("code") or ""))
+        text.append(str(err.get("title") or ""))
+        text.append(str(err.get("detail") or ""))
+    joined = " ".join(text).lower()
+    return "internal group" in joined
+
+
+def enable_all_builds(token, group_id):
+    payload = {
+        "data": {
+            "type": "betaGroups",
+            "id": group_id,
+            "attributes": {"hasAccessToAllBuilds": True},
+        }
+    }
+    status, body = signing.api(token, "PATCH", f"/v1/betaGroups/{group_id}", payload)
+    if status in (200, 409):
+        return True
+    if status == 403:
+        show("could not turn on access to every build for the internal group")
+        return False
+    parsed(status, body, "internal group all builds")
+    return True
 
 
 def tester_count(token, group_id):
@@ -297,6 +331,21 @@ def report_found(version, attributes, detail, group_names):
         show("internalGroups=none")
 
 
+def build_listed_in_groups(token, groups, build_id):
+    """True when an internal group lists the build, or the list cannot be read."""
+    if not groups:
+        return True
+    saw_no = False
+    for group in groups:
+        contained = group_contains_build(token, group["id"], build_id)
+        if contained is None:
+            return True
+        if contained:
+            return True
+        saw_no = True
+    return not saw_no
+
+
 def membership_before_change(token, groups, build_id):
     names = []
     unreadable = False
@@ -332,7 +381,14 @@ def ensure_group_membership(token, groups, build_id, changes):
                 show(line)
             continue
         result = assign_build(token, group["id"], build_id)
-        if result == "already":
+        if result == "automatic":
+            enabled = enable_all_builds(token, group["id"])
+            line = (
+                f"internal group {name} receives every build"
+                if enabled
+                else f"internal group {name} did not accept this build yet"
+            )
+        elif result == "already":
             line = f"build already in internal group {name}"
         else:
             line = f"added build to internal group {name}"
@@ -394,12 +450,13 @@ def release(version, wait_seconds, require_ready):
                     show(line)
         processing = attributes.get("processingState")
         internal = detail.get("internalBuildState")
+        listed = build_listed_in_groups(token, groups, build_id)
         if processing in ("FAILED", "INVALID"):
             show("final processingState=" + value_text(processing))
             show("final internalBuildState=" + value_text(internal))
             sys.stderr.write(f"Build {version} was rejected by App Store Connect ({processing}).\n")
             raise SystemExit(1)
-        if processing == "VALID" and internal in READY_INTERNAL:
+        if processing == "VALID" and internal in READY_INTERNAL and listed:
             show("final processingState=" + value_text(processing))
             show("final internalBuildState=" + value_text(internal))
             if not changes:
@@ -523,9 +580,22 @@ def self_test():
             state["internal"] = "READY_FOR_BETA_TESTING"
             return 200, json.dumps({"data": {"type": "builds", "id": "BUILD"}})
         if path == "/v1/betaGroups/GROUP/relationships/builds" and method == "POST":
+            if state.get("refuse_assign"):
+                state["refuse_assign"] = False
+                return 422, json.dumps({
+                    "errors": [{
+                        "status": "422",
+                        "code": "ENTITY_UNPROCESSABLE",
+                        "title": "Builds cannot be assigned to this internal group.",
+                        "detail": "Cannot add internal group to a build.",
+                    }]
+                })
             state["assigned"].add("GROUP")
             state["internal"] = "IN_BETA_TESTING"
             return 204, ""
+        if path == "/v1/betaGroups/GROUP" and method == "PATCH":
+            state["assigned"].add("GROUP")
+            return 200, json.dumps({"data": {"type": "betaGroups", "id": "GROUP"}})
         if path.startswith("/v1/betaGroups/GROUP/betaTesters"):
             testers = [{"id": "T", "attributes": {"state": "ACTIVE"}}] if state["testers"] else []
             return 200, json.dumps({"data": testers})
@@ -579,6 +649,23 @@ def self_test():
         state["used_forbidden_read"] = False
         release("164", wait_seconds=60, require_ready=True)
         hidden = captured.getvalue()
+        captured.seek(0)
+        captured.truncate(0)
+        state["encryption"] = False
+        state["processing"] = "VALID"
+        state["internal"] = "READY_FOR_BETA_TESTING"
+        state["groups"] = [{
+            "type": "betaGroups",
+            "id": "GROUP",
+            "attributes": {"name": "Internal", "isInternalGroup": True},
+        }]
+        state["assigned"] = set()
+        state["testers"] = {"USER"}
+        state["ticks"] = 0
+        state["hide_group_builds"] = False
+        state["refuse_assign"] = True
+        release("164", wait_seconds=60, require_ready=True)
+        automatic = captured.getvalue()
     finally:
         sys.stdout = held
         signing.api = real_api
@@ -617,6 +704,10 @@ def self_test():
             raise SystemExit("self-test missing after unreadable groups: " + line)
     if "owner@example.com" in hidden:
         raise SystemExit("self-test printed a tester address")
+    if "internal group Internal receives every build" not in automatic:
+        raise SystemExit("self-test did not keep going after an automatic internal group")
+    if "final processingState=VALID" not in automatic or "final internalBuildState=READY_FOR_BETA_TESTING" not in automatic:
+        raise SystemExit("self-test did not finish after the automatic internal group")
     show("asc testflight: ok")
 
 
