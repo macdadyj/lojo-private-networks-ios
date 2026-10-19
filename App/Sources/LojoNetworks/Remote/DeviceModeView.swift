@@ -38,12 +38,17 @@ struct DeviceModeView: View {
 
                     shortcutNames
                     if !device.schedules.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Schedules on this iPhone")
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Schedules on this phone")
                                 .font(.headline)
                             ForEach(device.schedules) { schedule in
-                                Text("\(schedule.soundTitle) · \(schedule.windowLabel)\(schedule.enabled ? "" : " · off")")
-                                    .font(.subheadline)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(schedule.soundTitle)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(schedule.enabled ? schedule.windowLabel : "\(schedule.windowLabel) · off")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                         .card()
