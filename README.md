@@ -115,9 +115,13 @@ gh secret set ASC_KEY_ID -R macdadyj/lojo-private-networks-ios
 gh secret set ASC_ISSUER_ID -R macdadyj/lojo-private-networks-ios
 base64 < AuthKey_XXXXXXXXXX.p8 | gh secret set ASC_KEY_P8 -R macdadyj/lojo-private-networks-ios
 gh secret set DEVELOPMENT_TEAM -R macdadyj/lojo-private-networks-ios
+base64 < distribution.p12 | gh secret set DIST_CERT_P12 -R macdadyj/lojo-private-networks-ios
+gh secret set DIST_CERT_PASSWORD -R macdadyj/lojo-private-networks-ios
 ```
 
-`ASC_KEY_P8` may be the `.p8` as base64 or the PEM text. `DEVELOPMENT_TEAM` is the paid Apple team id (not committed). The workflow mints a one-run iOS Distribution certificate and an App Store profile, then deletes the profile and revokes only that certificate.
+`ASC_KEY_P8` may be the `.p8` as base64 or the PEM text. `DEVELOPMENT_TEAM` is the paid Apple team id (not committed). `DIST_CERT_P12` is the shared iOS Distribution certificate (`VJ5MXTN7UT`) as base64 PKCS#12, and `DIST_CERT_PASSWORD` unlocks it. The upload imports that certificate into a temporary keychain, fetches or creates an App Store profile for `com.lojo.PrivateNetworks` and any app extensions tied to that certificate, and deletes the keychain afterwards. It does not create or revoke distribution certificates.
+
+The Internal TestFlight group is created with access to every build. The release step does not assign a build to that group by hand; it checks `GET /v1/betaGroups/{id}/builds`.
 
 ### App Store Connect clicks (once)
 
