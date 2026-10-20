@@ -8,7 +8,7 @@ public enum RemoteHelpCopy {
 
     Both phones use the site gateway you already paired. There is no separate relay address to type.
 
-    What does travel across your private network: play and stop, the sound you pick, volume for the built-in sounds, a sleep timer, and schedules such as white noise from 8:00 PM to 6:00 AM. Schedules run on the spare iPhone while iPhone Remote Controller is open there. Locking the screen keeps sound playing, including the stop time. A start time fires while that mode is still running. iOS will not launch it from a force-quit at an exact minute.
+    What does travel across your private network: play and stop, the sound you pick, volume for the built-in sounds, a sleep timer, and schedules such as white noise from 8:00 PM to 6:00 AM. Schedules run on the spare phone while Control mode is on. A sound that is playing continues with the screen locked, including the stop time. With nothing playing, iOS may suspend the app soon after the screen locks, and the controlling phone shows Not reachable. A start time fires while Control mode is still running. iOS will not launch it after the app is closed from the app switcher.
 
     Apple Music uses the spare iPhone's own volume buttons. iOS does not let another phone set the system volume. Built-in sounds use the volume slider.
 
@@ -179,11 +179,122 @@ public struct MusicTrack: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var title: String
     public var artist: String
+    public var subtitle: String?
+    public var kind: String?
+    public var artworkJPEG: String?
+    public var scope: String?
+    public var page: Int?
+    public var pageCount: Int?
 
-    public init(id: String, title: String, artist: String) {
+    public init(
+        id: String,
+        title: String,
+        artist: String,
+        subtitle: String? = nil,
+        kind: String? = nil,
+        artworkJPEG: String? = nil,
+        scope: String? = nil,
+        page: Int? = nil,
+        pageCount: Int? = nil
+    ) {
         self.id = id
         self.title = title
         self.artist = artist
+        self.subtitle = subtitle
+        self.kind = kind
+        self.artworkJPEG = artworkJPEG
+        self.scope = scope
+        self.page = page
+        self.pageCount = pageCount
+    }
+}
+
+/// A library browse request carried on the existing play command as `library:scope:page:parent:query`.
+/// The site gateway already forwards that command. It does not need a new route.
+public struct LibraryRequest: Equatable, Sendable {
+    public var scope: String
+    public var page: Int
+    public var parent: String
+    public var query: String
+
+    public init(scope: String, page: Int, parent: String = "", query: String = "") {
+        self.scope = scope
+        self.page = page
+        self.parent = parent
+        self.query = query
+    }
+
+    public var soundID: String {
+        let parentText = parent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
+        let queryText = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
+        return "library:\(scope):\(page):\(parentText):\(queryText)"
+    }
+
+    public static func parse(_ soundID: String) -> LibraryRequest? {
+        guard soundID.hasPrefix("library:") else { return nil }
+        let parts = soundID.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 5, let page = Int(parts[2]) else { return nil }
+        let parent = parts[3].removingPercentEncoding ?? parts[3]
+        let query = parts.dropFirst(4).joined(separator: ":").removingPercentEncoding ?? ""
+        let scope = parts[1]
+        guard ["recent", "playlists", "artists", "albums", "songs", "search", "queue"].contains(scope) else { return nil }
+        return LibraryRequest(scope: scope, page: max(0, page), parent: parent, query: query)
+    }
+}
+
+public enum LibraryPageSlice {
+    public static let pageSize = 24
+
+    public static func slice<T>(_ items: [T], page: Int) -> (page: Int, pageCount: Int, items: [T]) {
+        if items.isEmpty { return (0, 0, []) }
+        let pageCount = (items.count + pageSize - 1) / pageSize
+        let safe = min(max(0, page), pageCount - 1)
+        let start = safe * pageSize
+        let end = min(items.count, start + pageSize)
+        return (safe, pageCount, Array(items[start..<end]))
+    }
+}
+
+public enum DemoLibrary {
+    public static let all: [MusicTrack] = [
+        MusicTrack(id: "playlist:1", title: "Road Trips", artist: "", subtitle: "Playlist", kind: "playlist"),
+        MusicTrack(id: "artist:1", title: "Sample", artist: "Sample", subtitle: "Artist", kind: "artist"),
+        MusicTrack(id: "album:1", title: "Night Drive", artist: "Sample", subtitle: "Album", kind: "album"),
+        MusicTrack(id: "music:demo", title: "Night Drive", artist: "Sample", subtitle: "Song", kind: "song"),
+        MusicTrack(id: "music:demo2", title: "Dawn", artist: "Sample", subtitle: "Song", kind: "song"),
+    ]
+
+    public static func page(scope: String, page: Int, parent: String, query: String) -> [MusicTrack] {
+        let wanted: [MusicTrack]
+        switch scope {
+        case "playlists":
+            wanted = all.filter { $0.kind == "playlist" }
+        case "artists":
+            wanted = all.filter { $0.kind == "artist" }
+        case "albums":
+            wanted = all.filter { $0.kind == "album" }
+        case "recent":
+            wanted = all.filter { $0.kind == "song" }
+        case "queue":
+            wanted = all.filter { $0.kind == "song" }
+        case "search":
+            let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            wanted = all.filter {
+                needle.isEmpty || $0.title.localizedCaseInsensitiveContains(needle) || $0.artist.localizedCaseInsensitiveContains(needle)
+            }
+        case "songs":
+            wanted = all.filter { $0.kind == "song" && (parent.isEmpty || $0.id.hasPrefix("music:")) }
+        default:
+            wanted = []
+        }
+        let sliced = LibraryPageSlice.slice(wanted, page: page)
+        return sliced.items.map { item in
+            var copy = item
+            copy.scope = scope
+            copy.page = sliced.page
+            copy.pageCount = sliced.pageCount
+            return copy
+        }
     }
 }
 

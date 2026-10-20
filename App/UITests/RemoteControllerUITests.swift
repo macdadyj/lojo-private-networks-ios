@@ -19,8 +19,16 @@ final class RemoteControllerUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["Network"].waitForExistence(timeout: 8))
         tap("remote.open")
         XCTAssertTrue(app.staticTexts["Spare iPhone"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Barn phone"].exists)
         XCTAssertTrue(app.staticTexts["Online"].exists)
         XCTAssertTrue(app.staticTexts["iPhone Remote Controller"].exists)
+        app.staticTexts["Barn phone"].tap()
+        XCTAssertTrue(app.staticTexts["Rain"].waitForExistence(timeout: 6))
+        tap("remote.library.open")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "remote.library.songs").firstMatch.waitForExistence(timeout: 6))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["Spare iPhone"].waitForExistence(timeout: 6))
 
         tap("remote.help")
         let limits = app.descendants(matching: .any).matching(identifier: "remote.help.limits").firstMatch

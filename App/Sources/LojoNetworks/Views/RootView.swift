@@ -22,6 +22,7 @@ struct RootView: View {
     @StateObject private var terminal = TerminalCenter()
     @AppStorage("lojo.onboarded") private var onboarded = false
     @AppStorage(RemotePreferences.roleKey) private var storedRemoteRole = "controller"
+    @AppStorage(RemotePreferences.controlModeKey) private var controlMode = true
     @AppStorage("lojo.appearance") private var appearanceRaw = Appearance.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
     @State private var watcher = PathWatcher()
@@ -114,8 +115,8 @@ struct RootView: View {
                 break
             }
         }
-        .task(id: remoteRole) {
-            guard remoteRole == "device" else { return }
+        .task(id: "\(remoteRole)-\(controlMode)") {
+            guard remoteRole == "device", controlMode else { return }
             await device.run()
         }
         .onAppear {

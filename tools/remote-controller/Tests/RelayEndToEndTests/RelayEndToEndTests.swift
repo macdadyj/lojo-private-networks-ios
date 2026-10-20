@@ -109,6 +109,63 @@ final class RelayEndToEndTests: XCTestCase {
         XCTAssertEqual(stale.first?.online, false)
     }
 
+    func testTwoSparePhonesDoNotShareCommands() async throws {
+        let server = Process()
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        server.arguments = ["node", root.appendingPathComponent("relay/server.js").path]
+        let port = 18792
+        server.environment = ProcessInfo.processInfo.environment.merging([
+            "PORT": String(port),
+            "BIND": "127.0.0.1",
+            "ONLINE_MS": "5000",
+        ]) { _, new in new }
+        try server.run()
+        defer { server.terminate() }
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        try await waitUntilReady(base)
+        let client = RelayClient(baseURL: base, networkCode: "ci-remote")
+
+        _ = try await client.register(RegisterBody(
+            id: "spare-1", name: "Spare iPhone", batteryPercent: 80, charging: false, schedules: []
+        ))
+        _ = try await client.register(RegisterBody(
+            id: "spare-2", name: "Barn phone", batteryPercent: 40, charging: true, schedules: []
+        ))
+        let listed = try await client.list()
+        XCTAssertEqual(listed.map(\.name), ["Barn phone", "Spare iPhone"])
+        XCTAssertEqual(listed.map(\.id), ["spare-2", "spare-1"])
+
+        _ = try await client.command(CommandBody(kind: .play, soundID: "rain"), phoneID: "spare-2")
+        _ = try await client.command(CommandBody(kind: .stop), phoneID: "spare-1")
+        let barn = try await client.heartbeat(HeartbeatBody(
+            batteryPercent: 40, charging: true, playback: .idle, music: [], lastError: nil, ack: []
+        ), phoneID: "spare-2")
+        let spare = try await client.heartbeat(HeartbeatBody(
+            batteryPercent: 80, charging: false, playback: .idle, music: [], lastError: nil, ack: []
+        ), phoneID: "spare-1")
+        XCTAssertEqual(barn.commands.map(\.kind), [.play])
+        XCTAssertEqual(barn.commands.first?.soundID, "rain")
+        XCTAssertEqual(spare.commands.map(\.kind), [.stop])
+        XCTAssertFalse(spare.commands.contains { $0.soundID == "rain" })
+
+        let libraryID = LibraryRequest(scope: "songs", page: 0).soundID
+        _ = try await client.command(CommandBody(kind: .play, soundID: libraryID), phoneID: "spare-2")
+        let barnLibrary = try await client.heartbeat(HeartbeatBody(
+            batteryPercent: 40, charging: true, playback: .idle, music: [], lastError: nil, ack: []
+        ), phoneID: "spare-2")
+        let spareQuiet = try await client.heartbeat(HeartbeatBody(
+            batteryPercent: 80, charging: false, playback: .idle, music: [], lastError: nil, ack: []
+        ), phoneID: "spare-1")
+        XCTAssertTrue(barnLibrary.commands.contains { $0.soundID == libraryID })
+        XCTAssertFalse(spareQuiet.commands.contains { ($0.soundID ?? "").hasPrefix("library:") })
+    }
+
     private func waitUntilReady(_ base: URL) async throws {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {

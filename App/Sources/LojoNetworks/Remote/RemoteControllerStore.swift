@@ -17,6 +17,7 @@ enum RemotePreferences {
     static let roleKey = "lojo.remote.role"
     static let nameKey = "lojo.remote.name"
     static let phoneIDKey = "lojo.remote.phoneID"
+    static let controlModeKey = "lojo.remote.controlMode"
 
     static func relayURL(launch: LaunchOptions) -> URL? {
         if let text = launch.relayURLText { return RelayEndpoint.url(from: text) }
@@ -58,7 +59,7 @@ final class RemoteControllerStore: ObservableObject {
         siteAccess = RemoteSiteAccess(launch: launch, site: site)
         demo = launch.remoteDemo
         if demo {
-            phones = [RemotePhone.demoSpare]
+            phones = [RemotePhone.demoSpare, RemotePhone.demoBarn]
         }
     }
 
@@ -86,6 +87,28 @@ final class RemoteControllerStore: ObservableObject {
             let detail = siteAccess.lastFailure ?? RemoteDiagnostics.text(error)
             message = "Can't reach the site gateway.\n\(detail)"
         }
+    }
+
+    func browse(phoneID: String, scope: String, page: Int = 0, parent: String = "", query: String = "") async {
+        let tracks = DemoLibrary.page(scope: scope, page: page, parent: parent, query: query)
+        if demo {
+            update(phoneID) { $0.music = tracks }
+            return
+        }
+        let request = LibraryRequest(scope: scope, page: page, parent: parent, query: query)
+        await send(CommandBody(kind: .play, soundID: request.soundID), phoneID: phoneID) { _ in }
+    }
+
+    func skip(phoneID: String, next: Bool) async {
+        if demo {
+            update(phoneID) { phone in
+                phone.playback?.playing = true
+                phone.playback?.title = next ? "Dawn" : "Night Drive"
+                phone.playback?.source = .appleMusic
+            }
+            return
+        }
+        await send(CommandBody(kind: .play, soundID: next ? "transport:next" : "transport:previous"), phoneID: phoneID) { _ in }
     }
 
     func play(phoneID: String) async {
@@ -195,6 +218,24 @@ extension RemotePhone {
         playback: .idle,
         schedules: [],
         music: [LojoRemote.MusicTrack(id: "music:demo", title: "Night Drive", artist: "Sample")],
+        shortcuts: SampleAutomations.shortcuts
+    )
+
+    static let demoBarn = RemotePhone(
+        id: "demo-barn",
+        name: "Barn phone",
+        online: true,
+        batteryPercent: 40,
+        charging: true,
+        playback: PlaybackSnapshot(
+            playing: true,
+            soundID: BundledSound.rain.rawValue,
+            title: "Rain",
+            volume: 0.4,
+            source: .bundled
+        ),
+        schedules: [],
+        music: [],
         shortcuts: SampleAutomations.shortcuts
     )
 }
