@@ -368,6 +368,20 @@ if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
 fi
 TEAM="${DEVELOPMENT_TEAM}"
 BUILD_NUMBER="$(compute_build_number "${GITHUB_RUN_NUMBER:-1}" "${GITHUB_RUN_ATTEMPT:-1}")"
+# Run 71 stopped on the Program License Agreement before any archive.
+# A later workflow run must upload that number, not the new run number.
+if [[ "${BUILD_NUMBER}" != "71" ]]; then
+  set +e
+  python3 "${SCRIPT_DIR}/asc_testflight.py" build-present --build 71
+  present=$?
+  set -e
+  if [[ "${present}" -eq 2 ]]; then
+    echo "Build 71 never reached App Store Connect. Uploading that build number."
+    BUILD_NUMBER=71
+  elif [[ "${present}" -ne 0 ]]; then
+    exit "${present}"
+  fi
+fi
 echo "Archive build number ${BUILD_NUMBER} for com.lojo.PrivateNetworks."
 WORKDIR="$(mktemp -d)"
 KEYCHAIN="$(signing_keychain)"
@@ -467,8 +481,14 @@ xcodebuild -exportArchive \
 echo "Uploaded to App Store Connect."
 echo "Releasing build ${BUILD_NUMBER} to the internal TestFlight group."
 set +e
-KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
-  python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 2700
+if [[ "${BUILD_NUMBER}" == "71" ]]; then
+  # This upload was cancelled before processing. Wait until App Store Connect finishes.
+  KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
+    python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 5400 --require-ready
+else
+  KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
+    python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 2700
+fi
 release_status=$?
 set -e
 if [[ "${release_status}" -ne 0 ]]; then
