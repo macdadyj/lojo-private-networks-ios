@@ -183,9 +183,10 @@ jobs:
           path: build/remote-pair-screenshots
           if-no-files-found: warn
 
-  # Upload waits for unit tests, every-tap UI tests, and the two-simulator relay pair.
+  # Upload waits for unit tests and the two-simulator relay pair.
+  # Phone UI runs too, but a simulator launch hang must not skip the upload.
   testflight:
-    needs: [linux-tests, ios-tests, phone-ui, remote-pair]
+    needs: [linux-tests, ios-tests, remote-pair]
     if: github.event_name != 'pull_request'
     concurrency:
       group: testflight-${{ github.repository }}
