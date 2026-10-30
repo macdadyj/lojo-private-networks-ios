@@ -124,6 +124,13 @@ def find_build(token, app_id, version):
     return pick_build(data, version)
 
 
+def build_is_present(version):
+    """True when App Store Connect already has this build version."""
+    token = signing.jwt_from_env()
+    app_id = find_app(token)
+    return find_build(token, app_id, version) is not None
+
+
 def adopt(version, wait_seconds):
     """Finish this run's upload if App Store Connect is still processing it.
 
@@ -712,6 +719,12 @@ def self_test():
     held = sys.stdout
     sys.stdout = captured = __import__("io").StringIO()
     try:
+        if not build_is_present("164"):
+            raise SystemExit("self-test did not see build 164")
+        if build_is_present("71"):
+            raise SystemExit("self-test invented build 71")
+        captured.seek(0)
+        captured.truncate(0)
         release("164", wait_seconds=60, require_ready=True)
         text = captured.getvalue()
         first_assigned = "GROUP" in state["assigned"]
@@ -856,7 +869,12 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
         return
-    if len(sys.argv) > 1 and sys.argv[1] in ("release", "adopt", "group-membership"):
+    if len(sys.argv) > 1 and sys.argv[1] in (
+        "release",
+        "adopt",
+        "group-membership",
+        "build-present",
+    ):
         command = sys.argv[1]
         version = os.environ.get("BUILD_NUMBER", "")
         wait_seconds = 900
@@ -880,7 +898,15 @@ def main():
             index += 2
         key_file = prepare_key()
         try:
-            if command == "adopt":
+            if command == "build-present":
+                if not version:
+                    raise SystemExit("Missing build number.")
+                if build_is_present(version):
+                    show(f"build {version} is already in App Store Connect")
+                else:
+                    show(f"build {version} is not in App Store Connect")
+                    raise SystemExit(2)
+            elif command == "adopt":
                 adopt(version or os.environ.get("BUILD_NUMBER", ""), wait_seconds)
             elif command == "group-membership":
                 if not version:
@@ -897,7 +923,7 @@ def main():
     raise SystemExit(
         "Usage: asc_testflight.py --self-test | adopt [--wait-seconds N] | "
         "release [--build N] [--wait-seconds N] [--require-ready] | "
-        "group-membership --build N"
+        "group-membership --build N | build-present --build N"
     )
 
 

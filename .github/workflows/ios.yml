@@ -191,7 +191,7 @@ jobs:
       group: testflight-${{ github.repository }}
       cancel-in-progress: false
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
