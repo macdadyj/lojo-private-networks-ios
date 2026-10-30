@@ -49,16 +49,30 @@ test "${CHAIN}" -ge 2
 bash scripts/ios-prepare.sh
 UDID="$(bash scripts/ios-sim-udid.sh)"
 echo "Simulator ${UDID}"
-xcodebuild test \
-  -project App/LojoNetworks.xcodeproj \
-  -scheme LojoNetworks \
-  -destination "platform=iOS Simulator,id=${UDID}" \
-  -clonedSourcePackagesDirPath build/SourcePackages \
-  -derivedDataPath build/DerivedData \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="-" \
-  DEVELOPMENT_TEAM="" \
-  ONLY_ACTIVE_ARCH=YES \
-  ARCHS=arm64 \
-  SWIFT_ENABLE_EXPLICIT_MODULES=NO
+run_tests() {
+  xcodebuild test \
+    -project App/LojoNetworks.xcodeproj \
+    -scheme LojoNetworks \
+    -destination "platform=iOS Simulator,id=${UDID}" \
+    -clonedSourcePackagesDirPath build/SourcePackages \
+    -derivedDataPath build/DerivedData \
+    CODE_SIGNING_ALLOWED=YES \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_IDENTITY="-" \
+    DEVELOPMENT_TEAM="" \
+    ONLY_ACTIVE_ARCH=YES \
+    ARCHS=arm64 \
+    SWIFT_ENABLE_EXPLICIT_MODULES=NO
+}
+set +e
+run_tests
+status=$?
+set -e
+if [[ "${status}" -ne 0 ]]; then
+  echo "iOS unit tests failed (status ${status}). Rebooting the simulator and trying once more." >&2
+  xcrun simctl shutdown "${UDID}" || true
+  sleep 2
+  xcrun simctl boot "${UDID}" || true
+  xcrun simctl bootstatus "${UDID}" -b || true
+  run_tests
+fi
