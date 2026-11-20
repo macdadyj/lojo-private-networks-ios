@@ -278,11 +278,74 @@ function markOffline(key, reason) {
 
 // ---------- hub socket ----------
 
-const socket = io.connect(PUBNODE_URL, {
-  transports: ["websocket", "polling"],
-  upgrade: true,
-  reconnection: true,
-});
+function configuredSecret(name) {
+  const value = process.env[name];
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value;
+}
+
+// Headers are omitted entirely when the variable is unset or empty.
+function hubSocketHeaders() {
+  const headers = {};
+  const gpio = configuredSecret("GPIO_SOCKET_TOKEN");
+  const legacy = configuredSecret("LEGACY_SOCKET_TOKEN");
+  if (gpio) headers["x-gpio-token"] = gpio;
+  if (legacy) headers["x-lojo-legacy-token"] = legacy;
+  return headers;
+}
+
+function hubAuthStatus() {
+  return Object.keys(hubSocketHeaders()).length ? "configured" : "none";
+}
+
+function hubTransports() {
+  const requested = String(process.env.HUB_TRANSPORTS || "").trim();
+  if (requested === "websocket" || requested === "polling") return [requested];
+  return ["websocket", "polling"];
+}
+
+function hubSocketOptions() {
+  const headers = hubSocketHeaders();
+  const transports = hubTransports();
+  const options = {
+    transports: transports,
+    upgrade: transports.length > 1,
+    reconnection: true,
+  };
+  if (Object.keys(headers).length === 0) return options;
+  // Node 22's global WebSocket drops handshake headers. forceNode keeps
+  // socket.io-client 2.x on the ws transport, which sends extraHeaders.
+  options.forceNode = true;
+  options.extraHeaders = Object.assign({}, headers);
+  options.transportOptions = {
+    polling: { extraHeaders: Object.assign({}, headers) },
+  };
+  return options;
+}
+
+function hubErrorText(err) {
+  if (typeof err === "string") return err;
+  if (err && typeof err.message === "string" && err.message) return err.message;
+  if (err && typeof err.data === "string") return err.data;
+  return "";
+}
+
+function redactSecrets(text) {
+  let out = String(text || "");
+  [process.env.GPIO_SOCKET_TOKEN, process.env.LEGACY_SOCKET_TOKEN].forEach((secret) => {
+    if (typeof secret === "string" && secret.length > 0) out = out.split(secret).join("[redacted]");
+  });
+  return out;
+}
+
+function noteUnauthorized(err) {
+  if (!/unauthorized/i.test(hubErrorText(err))) return false;
+  hub.lastError = "unauthorized";
+  console.log("pub-node unauthorized");
+  return true;
+}
+
+const socket = io.connect(PUBNODE_URL, hubSocketOptions());
 
 socket.on("connect", () => {
   console.log("pub-node connected", PUBNODE_URL, socket.id);
@@ -297,11 +360,17 @@ socket.on("disconnect", (reason) => {
   hub.since = new Date().toISOString();
 });
 socket.on("connect_error", (err) => {
-  hub.lastError = String(err && err.message ? err.message : err);
+  if (noteUnauthorized(err)) return;
+  hub.lastError = redactSecrets(hubErrorText(err) || "connect error");
   console.log("pub-node connect_error", hub.lastError);
 });
 socket.on("error", (err) => {
-  console.log("pub-node error", String(err));
+  if (noteUnauthorized(err)) return;
+  console.log("pub-node error", redactSecrets(hubErrorText(err) || "error"));
+});
+socket.on("unauthorized", () => {
+  hub.lastError = "unauthorized";
+  console.log("pub-node unauthorized");
 });
 
 socket.on("nodeTypeRequest", (data) => {
@@ -533,6 +602,7 @@ app.get("/health", (_req, res) => {
     flex: false,
     pubnode: PUBNODE_URL,
     pubnodeConnected: !!socket.connected,
+    hubAuth: hubAuthStatus(),
     devices: devices.size,
   });
 });
@@ -546,6 +616,7 @@ app.get("/v1/network", (req, res) => {
     version: VERSION,
     gateway: { name: os.hostname(), startedAt: startedAt, uptimeSec: Math.round(process.uptime()) },
     site: site,
+    hubAuth: hubAuthStatus(),
     hub: {
       connected: !!socket.connected,
       since: hub.since,

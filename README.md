@@ -182,6 +182,18 @@ scripts/deploy-sidecar.sh   # syntax check, back up live server.js, copy, restar
 The gateway re-lists the hub roster every 60 s and 6 s after any device leaves, because the hub
 doesn't re-announce a device that drops and rejoins within a second or two.
 
+Hub handshake headers are sent only when the matching variable is set (empty values are omitted).
+The user unit loads them from `EnvironmentFile=-%h/.config/ranch-field-api/pubnode.env`. Names only;
+do not commit values.
+
+| Variable | Header |
+|---|---|
+| `GPIO_SOCKET_TOKEN` | `x-gpio-token` |
+| `LEGACY_SOCKET_TOKEN` | `x-lojo-legacy-token` |
+
+`/health` and `/v1/network` include `hubAuth`: `configured` when either variable is set, `none` otherwise.
+A hub unauthorized reply is recorded as `hub.lastError` with the value `unauthorized`. That status value is the word itself.
+
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health`, `/devices`, `/devices/:id`, `/devices/:id/still` | Legacy, unchanged (old Ranch Field app) |
